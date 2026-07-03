@@ -117,19 +117,28 @@ function placeObject(obj) {
 }
 
 function loadMesh(visit) {
-  // prefer the photo-textured GLB; fall back to the vertex-colored PLY
-  const glb = `/api/result/${encodeURIComponent(visit)}/mesh_textured.glb`;
-  fetch(glb, {method:"HEAD"}).then(r => {
-    if (r.ok) {
-      new GLTFLoader().load(`${glb}?t=${Date.now()}`, (g) => placeObject(g.scene));
-    } else {
-      new PLYLoader().load(`/api/result/${encodeURIComponent(visit)}/mesh.ply?t=${Date.now()}`, (geo) => {
-        geo.computeVertexNormals();
-        const mat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85, metalness:0.0, flatShading:false });
-        placeObject(new THREE.Mesh(geo, mat));
-      });
-    }
-  });
+  // Prefer the photo-textured GLB; fall back to the vertex-colored PLY on any
+  // load error. (No HEAD preflight — this FastAPI app answers HEAD with 405,
+  // which used to leave the viewport permanently black.)
+  const base = `/api/result/${encodeURIComponent(visit)}`;
+  const loadPly = () => {
+    new PLYLoader().load(`${base}/mesh.ply?t=${Date.now()}`, (geo) => {
+      geo.computeVertexNormals();
+      const mat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85, metalness:0.0, flatShading:false });
+      placeObject(new THREE.Mesh(geo, mat));
+    }, undefined, (e) => console.warn("mesh.ply load failed", e));
+  };
+  new GLTFLoader().load(`${base}/mesh_textured.glb?t=${Date.now()}`, (g) => {
+    // The baked atlas already contains the real studio lighting; re-lighting
+    // it through a PBR material just darkens it. Render unlit.
+    g.scene.traverse(o => {
+      if (o.isMesh && o.material && o.material.map) {
+        o.material.map.colorSpace = THREE.SRGBColorSpace;
+        o.material = new THREE.MeshBasicMaterial({ map: o.material.map });
+      }
+    });
+    placeObject(g.scene);
+  }, undefined, loadPly);
 }
 
 // ---- measurements ----
@@ -160,7 +169,7 @@ async function loadVisits() {
 }
 function selectVisit(v) {
   $("cmpimg").src = `/api/result/${encodeURIComponent(v)}/comparison.png?t=${Date.now()}`;
-  fetch(`/api/result/${encodeURIComponent(v)}/mesh.ply`, {method:"HEAD"}).then(r => { if (r.ok) loadMesh(v); });
+  loadMesh(v);   // loader error-callbacks handle a not-yet-reconstructed visit
   loadMeasures(v);
 }
 $("visit").addEventListener("change", e => selectVisit(e.target.value));
