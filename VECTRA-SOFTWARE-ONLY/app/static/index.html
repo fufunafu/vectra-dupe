@@ -73,6 +73,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const $ = (id) => document.getElementById(id);
 const LABELS = {
@@ -103,18 +104,31 @@ window.addEventListener("resize", resize);
 function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); }
 loop();
 
+function placeObject(obj) {
+  if (mesh) scene.remove(mesh);
+  const box = new THREE.Box3().setFromObject(obj);
+  const c = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const s = 1.6 / Math.max(size.x, size.y, size.z);
+  obj.position.sub(c.multiplyScalar(1)); obj.position.multiplyScalar(s); obj.scale.setScalar(s);
+  mesh = obj; scene.add(mesh);
+  camera.position.set(0, 0, 3.0); controls.target.set(0,0,0); controls.update();
+  resize();
+}
+
 function loadMesh(visit) {
-  new PLYLoader().load(`/api/result/${encodeURIComponent(visit)}/mesh.ply?t=${Date.now()}`, (geo) => {
-    if (mesh) { scene.remove(mesh); mesh.geometry.dispose(); }
-    geo.computeVertexNormals();
-    geo.computeBoundingBox();
-    const c = new THREE.Vector3(); geo.boundingBox.getCenter(c); geo.translate(-c.x,-c.y,-c.z);
-    const size = new THREE.Vector3(); geo.boundingBox.getSize(size);
-    const s = 1.6 / Math.max(size.x,size.y,size.z); geo.scale(s,s,s);
-    const mat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85, metalness:0.0, flatShading:false });
-    mesh = new THREE.Mesh(geo, mat); scene.add(mesh);
-    camera.position.set(0, 0, 3.0); controls.target.set(0,0,0); controls.update();
-    resize();
+  // prefer the photo-textured GLB; fall back to the vertex-colored PLY
+  const glb = `/api/result/${encodeURIComponent(visit)}/mesh_textured.glb`;
+  fetch(glb, {method:"HEAD"}).then(r => {
+    if (r.ok) {
+      new GLTFLoader().load(`${glb}?t=${Date.now()}`, (g) => placeObject(g.scene));
+    } else {
+      new PLYLoader().load(`/api/result/${encodeURIComponent(visit)}/mesh.ply?t=${Date.now()}`, (geo) => {
+        geo.computeVertexNormals();
+        const mat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85, metalness:0.0, flatShading:false });
+        placeObject(new THREE.Mesh(geo, mat));
+      });
+    }
   });
 }
 

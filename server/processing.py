@@ -5,8 +5,10 @@ y up, face looking along +z (derived from the front-pose camera). This keeps
 viewer orientation and heatmap projections consistent across capture sources.
 """
 
+import glob
 import json
 import os
+import shutil
 import sys
 
 import numpy as np
@@ -32,7 +34,7 @@ DISPLAY_CROP_RADIUS_MM = float(os.environ.get("VECTRA_DISPLAY_CROP_MM", "110.0")
 # mesh_textured.glb), on top of the fusion-mesh smoothing. The measurement mesh
 # (mesh.ply) is left at the fusion level; this is purely cosmetic — it irons out
 # the residual ripple so a straight nose looks straight, without affecting volume.
-DISPLAY_SMOOTH_ITERS = 12
+DISPLAY_SMOOTH_ITERS = int(os.environ.get("VECTRA_DISPLAY_SMOOTH", "12"))
 
 # Light Taubin for the OC display mesh — OC geometry is already sharp, so just a
 # few iterations to take the edge off the periphery without melting detail.
@@ -145,6 +147,10 @@ def process_session(raw_dir: str, out_dir: str,
     """
     poses, color_frames, meta = io_session.load_session(raw_dir)
     os.makedirs(out_dir, exist_ok=True)
+    # stale OC scratch dirs survive a killed process; clear them so they don't pile up
+    for stale in glob.glob(os.path.join(out_dir, "oc_*")):
+        if os.path.isdir(stale):
+            shutil.rmtree(stale, ignore_errors=True)
 
     # --- Measurement mesh: ALWAYS depth-fusion (TSDF) — the validated ±0.2 mL path.
     extrinsics = fuse.view_extrinsics(poses)
@@ -161,10 +167,16 @@ def process_session(raw_dir: str, out_dir: str,
     display_source = "tsdf"
     oc_stats: dict = {}
     oc = None
+    # record the preconditions so a TSDF fallback is never silent about why
+    oc_avail = {
+        "tool": photogrammetry.tool_available(),
+        "landmarks": photogrammetry.landmark_tooling_available(),
+        "disabled": os.environ.get("VECTRA_DISABLE_OC") == "1",
+        "has_color_frames": bool(color_frames),
+    }
     use_oc = (color_frames and poses
-              and photogrammetry.tool_available()
-              and photogrammetry.landmark_tooling_available()
-              and os.environ.get("VECTRA_DISABLE_OC") != "1")
+              and oc_avail["tool"] and oc_avail["landmarks"]
+              and not oc_avail["disabled"])
     if use_oc:
         try:
             oc = photogrammetry.reconstruct_metric(raw_dir, poses, color_frames, out_dir)
@@ -173,6 +185,7 @@ def process_session(raw_dir: str, out_dir: str,
         except Exception as e:  # noqa: BLE001
             print(f"[process_session] Object Capture display skipped, using TSDF: {e}")
             oc = None
+            oc_stats = {"oc_error": str(e)}
 
     vertex_ok = textured_ok = False
     if oc is not None:
@@ -257,6 +270,7 @@ def process_session(raw_dir: str, out_dir: str,
     # OC scale/rms/ipd display diagnostics (its "reconstruction" key would clobber
     # the measurement source, so drop it — the display geometry is display_source).
     stats.update({k: v for k, v in oc_stats.items() if k != "reconstruction"})
+    stats["oc_available"] = oc_avail
     with open(os.path.join(out_dir, "stats.json"), "w") as f:
         json.dump(stats, f, indent=2)
     return stats

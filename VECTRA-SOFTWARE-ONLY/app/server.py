@@ -29,6 +29,7 @@ PROGRESS = [
     ("[vggt] running forward", 30, "AI reconstructing 3D (this is the slow part)"),
     ("[vggt] forward done", 58, "3D geometry recovered"),
     ("[recon] done", 66, "Saved point cloud"),
+    ("[mesh] tsdf", 80, "Built surface mesh"),
     ("[mesh] alpha-shape", 80, "Built surface mesh"),
     ("[render] wrote", 90, "Rendered views"),
     ("[compare] wrote", 92, "Built comparison"),
@@ -128,6 +129,14 @@ def mesh(visit: str):
     if not os.path.exists(p):
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(p, media_type="application/octet-stream")
+
+
+@app.get("/api/result/{visit}/mesh_textured.glb")
+def mesh_textured(visit: str):
+    p = os.path.join(out_dir_for(visit), "mesh_textured.glb")
+    if not os.path.exists(p):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(p, media_type="model/gltf-binary")
 
 
 @app.get("/api/result/{visit}/comparison.png")

@@ -57,6 +57,8 @@ def main() -> int:
             if disp == "object_capture":
                 extra = (f"  rms={s.get('align_rms_mm')}mm ipd={s.get('align_ipd_mm')}mm "
                          f"pass={s.get('oc_attempts_passed')}/{s.get('oc_attempts')}")
+            elif s.get("oc_error"):
+                extra = f"  oc_error: {s['oc_error']}"
             print(f"  OK   {name}  display={disp}  "
                   f"verts={s.get('vertices')} tex={s.get('has_textured_glb')}{extra}  "
                   f"({time.time() - t0:.0f}s)")

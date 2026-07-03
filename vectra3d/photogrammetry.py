@@ -65,8 +65,11 @@ OC_DETAIL = os.environ.get("VECTRA_OC_DETAIL", "full")
 REF_VIEWS = ("front", "left_half", "right_half")
 
 # Alignment guards — reject (=> TSDF fallback) rather than corrupt measurements.
+# The rms guard is display-cosmetic (measurement never uses OC); IPD + head
+# height independently backstop the scale, so 10 mm keeps borderline-but-fine
+# runs instead of dropping to the blurry TSDF display.
 MIN_CORRESPONDENCES = 60
-MAX_ALIGN_RMS_MM = 8.0
+MAX_ALIGN_RMS_MM = 10.0
 IPD_MIN_MM, IPD_MAX_MM = 48.0, 82.0     # human inter-pupillary distance range
 HEAD_HEIGHT_MIN_MM, HEAD_HEIGHT_MAX_MM = 140.0, 340.0
 
@@ -75,7 +78,7 @@ HEAD_HEIGHT_MIN_MM, HEAD_HEIGHT_MAX_MM = 140.0, 340.0
 # attempt occasionally trips a guard and drops to the TSDF display. We run a few
 # attempts and keep the lowest-rms one that passes every guard. Overridable via
 # VECTRA_OC_ATTEMPTS. Each attempt re-runs ocrecon (~20 s at full detail).
-OC_ATTEMPTS = max(1, int(os.environ.get("VECTRA_OC_ATTEMPTS", "3")))
+OC_ATTEMPTS = max(1, int(os.environ.get("VECTRA_OC_ATTEMPTS", "5")))
 
 
 @dataclass
@@ -390,14 +393,17 @@ def _stage_images(raw_dir: str, work_dir: str) -> int:
     return n
 
 
-def _run_ocrecon(image_dir: str, out_obj: str) -> dict:
+def _run_ocrecon(image_dir: str, out_obj: str, timeout_s: int = 900) -> dict:
     """Run the CLI; returns its final-line JSON ({output,images_used,seconds})."""
-    proc = subprocess.run(
-        [OCRECON_BIN, image_dir, out_obj, "--detail", OC_DETAIL,
-         "--feature-sensitivity", "high"],
-        capture_output=True, text=True)
+    try:
+        proc = subprocess.run(
+            [OCRECON_BIN, image_dir, out_obj, "--detail", OC_DETAIL,
+             "--feature-sensitivity", "high"],
+            capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"ocrecon hung (>{timeout_s}s), killed")
     if proc.returncode != 0 or not os.path.isfile(out_obj):
-        tail = "\n".join(proc.stderr.strip().splitlines()[-5:])
+        tail = "\n".join((proc.stderr or "").strip().splitlines()[-5:])
         raise RuntimeError(f"ocrecon failed (exit {proc.returncode}): {tail}")
     last = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else "{}"
     try:
@@ -431,45 +437,61 @@ def reconstruct_metric(raw_dir: str, poses: list[PoseCapture],
     guard; if none do, we re-raise the last failure so the caller falls back to
     TSDF. `stats` gains `oc_attempts` (run) and `oc_attempts_passed`."""
     best: OCResult | None = None
-    last_err: Exception | None = None
+    attempt_log: list[dict] = []
     n_passed = 0
     for i in range(max(1, attempts)):
+        diag: dict = {"attempt": i + 1}
         try:
-            res = _reconstruct_metric_once(raw_dir, poses, color_frames, out_dir)
+            res = _reconstruct_metric_once(raw_dir, poses, color_frames, out_dir,
+                                           diag=diag)
         except Exception as e:  # noqa: BLE001
-            last_err = e
-            print(f"[photogrammetry] attempt {i + 1}/{attempts} rejected: {e}")
+            diag["error"] = str(e)
+            attempt_log.append(diag)
+            print(f"[photogrammetry] attempt {i + 1}/{attempts} rejected: {e} "
+                  f"(partial: {diag})")
             continue
+        attempt_log.append(diag)
         n_passed += 1
         if best is None or res.stats["align_rms_mm"] < best.stats["align_rms_mm"]:
             best = res
         print(f"[photogrammetry] attempt {i + 1}/{attempts} ok: "
               f"rms={res.stats['align_rms_mm']}mm ipd={res.stats['align_ipd_mm']}mm")
     if best is None:
-        raise last_err if last_err else RuntimeError("no Object Capture attempt succeeded")
+        detail = "; ".join(f"#{d['attempt']}: {d.get('error', '?')}"
+                           for d in attempt_log)
+        raise RuntimeError(f"all {attempts} Object Capture attempts failed — {detail}")
     best.stats["oc_attempts"] = attempts
     best.stats["oc_attempts_passed"] = n_passed
+    best.stats["oc_attempt_log"] = attempt_log
     return best
 
 
 def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
-                             color_frames: list[ColorFrame], out_dir: str) -> OCResult:
+                             color_frames: list[ColorFrame], out_dir: str,
+                             diag: dict | None = None) -> OCResult:
     """One Object Capture reconstruction + metric alignment. Raises on any failure
-    or guard violation."""
+    or guard violation. `diag` (if given) is filled with every intermediate metric
+    as it is computed, so a failed attempt still reports how far it got and by how
+    much it missed a guard."""
+    diag = diag if diag is not None else {}
     if not poses:
         raise RuntimeError("no depth keyframes for metric anchoring")
     if not landmark_tooling_available():
         raise RuntimeError("MediaPipe landmark tooling unavailable")
 
+    debug = os.environ.get("VECTRA_OC_DEBUG") == "1"
     work = tempfile.mkdtemp(prefix="oc_", dir=out_dir)
     try:
         n_img = _stage_images(raw_dir, work)
+        diag["n_images"] = n_img
         if n_img < 8:
             raise RuntimeError(f"too few photos for photogrammetry ({n_img})")
         out_obj = os.path.join(work, "model.obj")
         run_info = _run_ocrecon(work, out_obj)
+        diag["oc_seconds"] = run_info.get("seconds")
 
         V, F, tri_uv, albedo = _load_obj_with_texture(out_obj)
+        diag["obj_verts"] = len(V)
         if len(V) == 0 or len(F) == 0:
             raise RuntimeError("ocrecon produced an empty mesh")
         if albedo is None or tri_uv is None:
@@ -481,18 +503,23 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
             raise RuntimeError("no face detected in any OBJ render")
         ocL, ocOK, N4, _ = oc
         refL, refOK = _ref_landmarks_world(raw_dir, poses)
+        diag["oc_landmarks"] = int(ocOK.sum())
+        diag["ref_landmarks"] = int(refOK.sum())
 
         # 2) solve the metric similarity from the shared landmarks.
         m = ocOK & refOK
+        diag["n_corr"] = int(m.sum())
         if int(m.sum()) < MIN_CORRESPONDENCES:
             raise RuntimeError(f"too few landmark correspondences ({int(m.sum())})")
         T_u, scale_u, rms, n_inl = _solve_similarity(ocL[m], refL[m])
+        diag["rms_mm"] = round(rms, 3)
         if rms > MAX_ALIGN_RMS_MM:
             raise RuntimeError(f"poor landmark alignment (rms={rms:.1f}mm)")
 
         # IPD sanity (independent metric check on the recovered scale).
         worldL = (T_u[:3, :3] @ ocL.T).T + T_u[:3, 3]
         ipd = float(np.linalg.norm(worldL[LEFT_IRIS_LM] - worldL[RIGHT_IRIS_LM]))
+        diag["ipd_mm"] = round(ipd, 2)
         if not (IPD_MIN_MM <= ipd <= IPD_MAX_MM):
             raise RuntimeError(f"implausible inter-pupillary distance {ipd:.1f}mm")
 
@@ -503,6 +530,7 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
         # head-height plausibility (around the anchor origin).
         head = V_world[np.linalg.norm(V_world, axis=1) <= 135.0]
         head_h = float(np.ptp(head[:, 1])) if len(head) else 0.0
+        diag["head_h_mm"] = round(head_h, 1)
         if not (HEAD_HEIGHT_MIN_MM <= head_h <= HEAD_HEIGHT_MAX_MM):
             raise RuntimeError(f"implausible head height {head_h:.0f}mm")
 
@@ -528,6 +556,13 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
         }
         return OCResult(mesh=mesh, textured=textured, stats=stats)
     finally:
+        if debug:
+            dbg = os.path.join(out_dir, "oc_debug")
+            os.makedirs(dbg, exist_ok=True)
+            for fn in ("oc_render.png", "model.obj", "model.mtl"):
+                p = os.path.join(work, fn)
+                if os.path.isfile(p):
+                    shutil.copy2(p, os.path.join(dbg, fn))
         shutil.rmtree(work, ignore_errors=True)
 
 
@@ -609,9 +644,33 @@ def write_normalized_textured_glb(textured: "o3d.t.geometry.TriangleMesh",
 
         V2 = (world_to_norm[:3, :3] @ V2.T).T + world_to_norm[:3, 3]
 
-        albedo = textured.material.texture_maps["albedo"]
-        out = _make_textured_tensor(V2, F2, uv2, albedo.as_tensor().numpy())
-        o3d.t.io.write_triangle_mesh(out_path, out)
+        # 4) export via trimesh with explicit conventions. Two pitfalls both hit
+        #    with Open3D's GLB writer: (a) glTF stores UVs per VERTEX while OC's
+        #    atlas is per triangle-corner with seams — collapsing scrambles seam
+        #    triangles, so split vertices per corner; (b) the writer V-flips
+        #    per-corner UVs on export, mapping every chart onto the wrong atlas
+        #    region (coherent-but-wrong patchwork in the viewer). trimesh takes
+        #    bottom-left-origin UVs and converts to glTF itself, so we hand it
+        #    exactly that. Smooth normals come from the un-split mesh.
+        shaded = o3d.geometry.TriangleMesh(
+            o3d.utility.Vector3dVector(V2), o3d.utility.Vector3iVector(F2))
+        shaded.compute_vertex_normals()
+        VN = np.asarray(shaded.vertex_normals)
+        V3 = V2[F2].reshape(-1, 3)
+        N3 = VN[F2].reshape(-1, 3)
+        F3 = np.arange(len(V3), dtype=np.int64).reshape(-1, 3)
+        UV3 = uv2.reshape(-1, 2)                     # image space: v = 0 at top
+
+        import trimesh
+        from PIL import Image
+        albedo = textured.material.texture_maps["albedo"].as_tensor().numpy()
+        vis = trimesh.visual.TextureVisuals(
+            uv=np.column_stack([UV3[:, 0], 1.0 - UV3[:, 1]]),   # bottom-left
+            material=trimesh.visual.material.SimpleMaterial(
+                image=Image.fromarray(np.ascontiguousarray(albedo))))
+        tm = trimesh.Trimesh(vertices=V3, faces=F3, vertex_normals=N3,
+                             visual=vis, process=False)
+        tm.export(out_path)
         return True
     except Exception as e:  # noqa: BLE001
         print(f"[photogrammetry] textured glb skipped: {e}")

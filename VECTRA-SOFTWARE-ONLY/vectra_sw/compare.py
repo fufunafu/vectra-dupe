@@ -36,7 +36,7 @@ def build(visit_dir: str, render_paths: list[str], out_path: str, row_h: int = 3
         cv2.putText(b, text, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         return b
     sheet = np.vstack([band("VECTRA (reference)", w), pad(top),
-                       band("OURS (classical SfM + learned dense)", w), pad(bot)])
+                       band("OURS (VGGT + TSDF fusion)", w), pad(bot)])
     cv2.imwrite(out_path, sheet)
     print(f"[compare] wrote {out_path}")
     return out_path

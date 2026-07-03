@@ -26,7 +26,88 @@ def _load():
     return _MODEL
 
 
-def reconstruct(image_paths: list[str], out_dir: str, conf_percentile: float = 50.0):
+def _head_masks(imgs: np.ndarray) -> np.ndarray:
+    """Per-view head masks computed directly on the VGGT-preprocessed images
+    (same near-black backdrop as the originals), so they are pixel-aligned with
+    the point maps by construction. Eroded a little to kill silhouette bleed."""
+    import cv2
+    masks = np.zeros(imgs.shape[:3], bool)
+    for i, im in enumerate((imgs * 255).astype(np.uint8)):
+        gray = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY)
+        fg = (gray > 18).astype(np.uint8)
+        fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(fg, 8)
+        if n > 1:
+            big = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            m = (lab == big).astype(np.uint8)
+            ff = m * 255
+            h, w = m.shape
+            cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 255)
+            m = (m * 255) | cv2.bitwise_not(ff)
+            fg = (m > 0).astype(np.uint8)
+        fg = cv2.erode(fg, np.ones((3, 3), np.uint8), iterations=1)
+        masks[i] = fg.astype(bool)
+    return masks
+
+
+def _cross_view_filter(wp: np.ndarray, valid: np.ndarray, extrinsic: np.ndarray,
+                       intrinsic: np.ndarray, neighbors: int = 2,
+                       rel_tol: float = 0.01) -> np.ndarray:
+    """Keep a point only if at least one neighboring view agrees on its depth.
+
+    Ghost/double surfaces come from per-view point maps that disagree; a point
+    from view s is projected into views s±1..s±neighbors and compared against
+    that view's own depth there. A point visible in a neighbor but off by more
+    than rel_tol of the median scene depth (and never confirmed) is dropped.
+    Points that land in no neighbor's mask keep their benefit of the doubt.
+    """
+    S, H, W = wp.shape[:3]
+    # per-view depth maps in each view's own camera
+    depths = np.full((S, H, W), np.nan, np.float32)
+    for s in range(S):
+        R, t = extrinsic[s, :, :3], extrinsic[s, :, 3]
+        z = wp[s].reshape(-1, 3) @ R[2] + t[2]
+        d = np.where(valid[s].reshape(-1), z, np.nan)
+        depths[s] = d.reshape(H, W)
+    tol = rel_tol * np.nanmedian(depths)
+    keep = np.zeros((S, H, W), bool)
+    seen_bad = np.zeros((S, H, W), bool)
+    for s in range(S):
+        pts = wp[s][valid[s]]
+        if not len(pts):
+            continue
+        confirmed = np.zeros(len(pts), bool)
+        rejected = np.zeros(len(pts), bool)
+        for nb in range(max(0, s - neighbors), min(S, s + neighbors + 1)):
+            if nb == s:
+                continue
+            R, t = extrinsic[nb, :, :3], extrinsic[nb, :, 3]
+            cam = pts @ R.T + t
+            z = cam[:, 2]
+            ok = z > 1e-6
+            u = np.full(len(pts), -1.0)
+            v = np.full(len(pts), -1.0)
+            u[ok] = cam[ok, 0] / z[ok] * intrinsic[nb, 0, 0] + intrinsic[nb, 0, 2]
+            v[ok] = cam[ok, 1] / z[ok] * intrinsic[nb, 1, 1] + intrinsic[nb, 1, 2]
+            ui, vi = np.round(u).astype(int), np.round(v).astype(int)
+            inb = ok & (ui >= 0) & (ui < W) & (vi >= 0) & (vi < H)
+            dn = np.full(len(pts), np.nan, np.float32)
+            dn[inb] = depths[nb, vi[inb], ui[inb]]
+            vis = np.isfinite(dn)
+            agree = vis & (np.abs(dn - z) < tol)
+            confirmed |= agree
+            rejected |= vis & ~agree
+        good = confirmed | ~rejected
+        keep[s][valid[s]] = good
+        seen_bad[s][valid[s]] = rejected & ~confirmed
+    n_valid, n_keep = int(valid.sum()), int(keep.sum())
+    print(f"[vggt] cross-view filter kept {n_keep}/{n_valid} "
+          f"(dropped {int(seen_bad.sum())} inconsistent)", flush=True)
+    return keep
+
+
+def reconstruct(image_paths: list[str], out_dir: str, conf_percentile: float = 25.0):
     import torch
     from vggt.utils.load_fn import load_and_preprocess_images
     from vggt.utils.pose_enc import pose_encoding_to_extri_intri
@@ -57,22 +138,28 @@ def reconstruct(image_paths: list[str], out_dir: str, conf_percentile: float = 5
 
     imgs = images.cpu().numpy().transpose(0, 2, 3, 1)        # (S,H,W,3) in [0,1]
 
-    pts = wp.reshape(-1, 3)
-    cols = imgs.reshape(-1, 3)
-    c = conf.reshape(-1)
-    thr = np.percentile(c, conf_percentile)
-    keep = (c >= thr) & np.isfinite(pts).all(1)
-    pts, cols = pts[keep], cols[keep]
-    print(f"[vggt] kept {keep.sum()}/{len(keep)} points (conf>={thr:.2f})", flush=True)
+    masks = _head_masks(imgs)
+    conf = np.where(masks, conf, 0.0)   # background contributes nothing downstream
+
+    thr = np.percentile(conf[masks], conf_percentile) if masks.any() else 0.0
+    valid = masks & (conf >= thr) & np.isfinite(wp).all(-1)
+    print(f"[vggt] mask+conf kept {int(valid.sum())}/{valid.size} "
+          f"(conf>={thr:.2f}, p{conf_percentile:g} within mask)", flush=True)
+    valid &= _cross_view_filter(wp, valid, extrinsic, intrinsic)
+
+    pts = wp[valid]
+    cols = imgs[valid]
 
     np.savez(os.path.join(out_dir, "vggt_raw.npz"),
              points=pts, colors=cols, extrinsic=extrinsic, intrinsic=intrinsic)
 
-    # per-view maps for metric measurements (iris pixel -> 3D world point)
+    # per-view maps for metric measurements (iris pixel -> 3D world point) and
+    # for TSDF meshing (valid = mask & conf & cross-view-consistent pixels)
     names = [os.path.basename(p) for p in image_paths]
     np.savez(os.path.join(out_dir, "vggt_perview.npz"),
              world_points=wp.astype(np.float32),
              conf=conf.astype(np.float32),
+             valid=valid,
              images=(imgs * 255).astype(np.uint8),
              extrinsic=extrinsic, intrinsic=intrinsic,
              names=np.array(names))

@@ -47,6 +47,9 @@ def head_mask(img: np.ndarray) -> np.ndarray:
     h, w = mask.shape
     cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 255)
     mask = mask | cv2.bitwise_not(ff)
+    # pull the boundary in: the outermost pixels mix backdrop and subject, which
+    # poisons silhouette features and texture projection
+    mask = cv2.erode(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
     return mask
 
 

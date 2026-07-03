@@ -7,6 +7,8 @@ a drift-sized shift; a divergent correction is discarded in favour of the raw
 ARKit pose (an unbounded "refine" slides whole views off and shreds the mesh).
 """
 
+import os
+
 import numpy as np
 import open3d as o3d
 
@@ -174,8 +176,56 @@ def _camera_yaw_deg(world_to_camera: np.ndarray) -> float:
     return float(np.degrees(np.arctan2(cam_center[0], cam_center[2])))
 
 
+def _landmarks_world(pose: PoseCapture) -> tuple[np.ndarray, np.ndarray] | None:
+    """MediaPipe's 478 face landmarks unprojected through this view's own depth
+    into world coords (raw pose). Returns (points (478,3), valid) or None when
+    the tooling is missing or no face is detectable (e.g. profile views)."""
+    if pose.color is None or pose.rgb_intrinsics is None:
+        return None
+    from . import photogrammetry as pg      # lazy: pg imports fuse at top level
+    if not pg.landmark_tooling_available():
+        return None
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+    tmp.close()
+    try:
+        o3d.io.write_image(tmp.name,
+                           o3d.geometry.Image(np.ascontiguousarray(pose.color)))
+        lmk = pg._detect_landmarks(tmp.name)
+    finally:
+        os.unlink(tmp.name)
+    if lmk is None or len(lmk.get("landmarks", [])) != 478:
+        return None
+    return pg._unproject_landmarks(pose, np.asarray(lmk["landmarks"], float))
+
+
+def _rigid_fit(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, float]:
+    """Least-squares rigid transform (R, t — no scale) mapping src -> dst.
+    Returns (T 4x4, rms of the fit)."""
+    mu_s, mu_d = src.mean(0), dst.mean(0)
+    cov = (dst - mu_d).T @ (src - mu_s) / len(src)
+    U, _, Vt = np.linalg.svd(cov)
+    S = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        S[2, 2] = -1
+    R = U @ S @ Vt
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[:3, 3] = mu_d - R @ mu_s
+    res = np.linalg.norm((R @ src.T).T + T[:3, 3] - dst, axis=1)
+    return T, float(res.mean())
+
+
+# A landmark-anchored correction is only trusted when the rigid fit is tight —
+# a sloppy fit means the landmarks themselves are unreliable on this view.
+MAX_LANDMARK_ANCHOR_RMS_MM = 6.0
+MIN_LANDMARK_CORRESPONDENCES = 100
+
+
 def refine_view_pose(pose: PoseCapture,
-                     reference: o3d.geometry.PointCloud) -> np.ndarray:
+                     reference: o3d.geometry.PointCloud,
+                     init: np.ndarray | None = None,
+                     anchor_ext: np.ndarray | None = None) -> np.ndarray:
     """Correct one view's pose drift by ICP onto a reference cloud.
 
     Faces are smooth, so geometry-only ICP slides tangentially and locks in a
@@ -187,9 +237,14 @@ def refine_view_pose(pose: PoseCapture,
     front view — a near-profile shares too little surface with the front view
     alone for ICP to converge, so it is registered against the 3/4 view that
     bridges them (see view_extrinsics).
+
+    `init` seeds ICP (e.g. a landmark-anchored correction) instead of identity;
+    `anchor_ext` is the pose to fall back to when ICP diverges — a landmark-
+    anchored extrinsic beats the raw ARKit pose, which leaves the drift (and its
+    misregistration ridges) fully in place.
     """
     src = colored_cloud(pose)
-    correction = np.eye(4)
+    correction = np.eye(4) if init is None else init.copy()
     try:
         for scale, iters in ((4.0, 60), (2.0, 35), (1.0, 20)):
             s = src.voxel_down_sample(scale)
@@ -203,7 +258,7 @@ def refine_view_pose(pose: PoseCapture,
                 o3d.pipelines.registration.ICPConvergenceCriteria(
                     max_iteration=iters)).transformation
     except RuntimeError:
-        correction = np.eye(4)
+        correction = np.eye(4) if init is None else init.copy()
         for max_corr in (8.0, 3.0, 1.5):
             correction = o3d.pipelines.registration.registration_icp(
                 src, reference, max_corr, correction,
@@ -224,7 +279,7 @@ def refine_view_pose(pose: PoseCapture,
     dr = pose.world_to_camera[:3, :3].T @ corrected[:3, :3]
     rot_deg = float(np.degrees(np.arccos(np.clip((np.trace(dr) - 1.0) / 2.0, -1.0, 1.0))))
     if trans_mm > MAX_ICP_TRANS_MM or rot_deg > MAX_ICP_ROT_DEG:
-        return pose.world_to_camera
+        return anchor_ext if anchor_ext is not None else pose.world_to_camera
     return corrected
 
 
@@ -246,10 +301,30 @@ def view_extrinsics(poses: list[PoseCapture]) -> list[np.ndarray]:
     extrinsics[0] = poses[0].world_to_camera
     reference = normals(colored_cloud(poses[0]))
 
+    # Landmark anchor: the front view's landmarks (unprojected through its own
+    # depth) are the reference positions of 478 physical points. Any other view
+    # that can see the face measures the same points; the rigid fit between the
+    # two sets IS that view's pose drift — an absolute correction ICP can start
+    # from and fall back to, instead of reverting to the drifted ARKit pose.
+    ref_lm = _landmarks_world(poses[0])
+
     order = sorted(range(1, len(poses)),
                    key=lambda i: abs(_camera_yaw_deg(poses[i].world_to_camera)))
     for i in order:
-        ext = refine_view_pose(poses[i], reference)
+        init = anchor = None
+        if ref_lm is not None:
+            lm = _landmarks_world(poses[i])
+            if lm is not None:
+                shared = lm[1] & ref_lm[1]
+                if int(shared.sum()) >= MIN_LANDMARK_CORRESPONDENCES:
+                    T_lm, rms = _rigid_fit(lm[0][shared], ref_lm[0][shared])
+                    if rms <= MAX_LANDMARK_ANCHOR_RMS_MM:
+                        init = T_lm
+                        anchor = poses[i].world_to_camera @ np.linalg.inv(T_lm)
+                        print(f"[fuse] {poses[i].name}: landmark anchor "
+                              f"({int(shared.sum())} pts, rms {rms:.1f}mm)",
+                              flush=True)
+        ext = refine_view_pose(poses[i], reference, init=init, anchor_ext=anchor)
         extrinsics[i] = ext
         # Fold the freshly-aligned view into the reference so the next (wider)
         # view has overlapping geometry to register against. Down-sample to keep
@@ -293,7 +368,11 @@ def integrate(poses: list[PoseCapture],
     # tip (and other features) move <0.3 mm while high-freq ripple drops markedly,
     # so this is safely below the volume noise floor. The viewer meshes get an
     # additional cosmetic pass (see processing.DISPLAY_SMOOTH_ITERS).
-    mesh = mesh.filter_smooth_taubin(number_of_iterations=12)
+    # Env-tunable so the phase0 harness can gate reductions (with landmark-
+    # anchored registration the ridges are smaller, so less smoothing may keep
+    # more genuine detail at the same noise floor).
+    mesh = mesh.filter_smooth_taubin(
+        number_of_iterations=int(os.environ.get("VECTRA_FUSE_TAUBIN", "12")))
     mesh.compute_vertex_normals()
     # Re-colour from the original full-resolution photos for a sharp texture.
     mesh = bake_vertex_colors(mesh, poses, extrinsics, color_frames, color_extrinsics)

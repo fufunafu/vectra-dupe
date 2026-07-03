@@ -33,7 +33,7 @@ def _look_at(eye, target, up):
     return R, -R @ eye   # world->cam R, t
 
 
-def _render_one(V, N, C, az, el, W=760, H=900, fov=38.0):
+def _render_one(V, N, C, az, el, W=760, H=900, fov=38.0, gain=1.35):
     a, e = np.radians(az), np.radians(el)
     d = np.array([np.sin(a) * np.cos(e), np.sin(e), np.cos(a) * np.cos(e)])
     extent = np.percentile(np.linalg.norm(V, axis=1), 95) * 2
@@ -52,9 +52,10 @@ def _render_one(V, N, C, az, el, W=760, H=900, fov=38.0):
     px, py = np.round(u).astype(int), np.round(v).astype(int)
 
     # Lambertian shade: light at the camera (in the +d direction), so surfaces facing
-    # the camera (N.d > 0) are lit. A small color gain compensates VGGT's dim images.
+    # the camera (N.d > 0) are lit. `gain` compensates VGGT's dim internal images
+    # (1.35); photo-textured colors need none (1.0).
     shade = 0.45 + 0.55 * np.clip(N @ d, 0, 1)
-    col = np.clip(C * 1.35 * shade[:, None], 0, 1)
+    col = np.clip(C * gain * shade[:, None], 0, 1)
 
     # dark vertical-gradient background like VECTRA
     bg = np.linspace(0.18, 0.05, H)[:, None] * np.ones((1, W))
@@ -79,7 +80,8 @@ def _render_one(V, N, C, az, el, W=760, H=900, fov=38.0):
 
 
 def render_arrays(V: np.ndarray, N: np.ndarray, C: np.ndarray,
-                  extrinsics: list[np.ndarray], out_dir: str) -> list[str]:
+                  extrinsics: list[np.ndarray], out_dir: str,
+                  gain: float = 1.35) -> list[str]:
     """Render points/normals/colors (world frame) from the canonical views."""
     import os, cv2
     B = canonical_basis(extrinsics)
@@ -88,7 +90,7 @@ def render_arrays(V: np.ndarray, N: np.ndarray, C: np.ndarray,
     Nc = N @ B
     paths = []
     for i, az in enumerate(VIEW_AZIMUTHS):
-        img = _render_one(Vc, Nc, C, az, ELEVATION)
+        img = _render_one(Vc, Nc, C, az, ELEVATION, gain=gain)
         p = os.path.join(out_dir, f"render_{i}_az{az:+d}.png")
         cv2.imwrite(p, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
         paths.append(p)

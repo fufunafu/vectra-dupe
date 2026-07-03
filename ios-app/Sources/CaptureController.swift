@@ -268,14 +268,24 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     // near-duplicates when you pause or re-cross covered ground — bounded by
     // `maxOrbitFrames` for upload/storage. Smaller step = denser; raise the cap
     // for an even richer set (≈0.4 MB/frame).
-    private let orbitMinStepDeg: Float = 5
-    private let maxOrbitFrames = 150
+    private let orbitMinStepDeg: Float = 4
+    private let maxOrbitFrames = 180
     /// Reject only fast whips (the sharpness gate handles the rest), so frames
     /// can be grabbed mid-sweep without stopping.
     private let orbitMotionCeiling: Double = 180
     /// Yaw/pitch (deg) of every frame captured this orbit, for the spacing test.
     private var orbitYaws: [Float] = []
     private var orbitPitches: [Float] = []
+
+    // Full-resolution stills (iOS 16 `captureHighResolutionFrame`, ~12 MP vs the
+    // ~1.5-2 MP stream). One per newly-filled coverage cell, rate-limited; each
+    // still carries its OWN ARFrame's pose + intrinsics so it drops into the
+    // existing color_frames schema as `still_###`.
+    private var stillCaptureSupported = false
+    private var stillFrames: [ColorFrameCapture] = []
+    private var lastStillAt: Date?
+    private let maxStillFrames = 30
+    private let minStillInterval: TimeInterval = 1.5
 
     func setViewportSize(_ size: CGSize) { viewportSize = size }
 
@@ -298,11 +308,22 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         guidance = GuidanceState()
         let config = ARFaceTrackingConfiguration()
         config.isLightEstimationEnabled = true
-        if let fmt = Self.bestFaceVideoFormat() {
+        // Prefer the format that supports captureHighResolutionFrame (iOS 16+):
+        // full-res stills are the single biggest Object Capture sharpness lever.
+        var format = Self.bestFaceVideoFormat()
+        stillCaptureSupported = false
+        if #available(iOS 16.0, *),
+           let rec = ARFaceTrackingConfiguration
+               .recommendedVideoFormatForHighResolutionFrameCapturing {
+            format = rec
+            stillCaptureSupported = true
+        }
+        if let fmt = format {
             config.videoFormat = fmt
             let r = fmt.imageResolution
             print("[capture] video format \(Int(r.width))×\(Int(r.height)) "
-                  + "(\(String(format: "%.1f", r.width * r.height / 1e6)) MP)")
+                  + "(\(String(format: "%.1f", r.width * r.height / 1e6)) MP)"
+                  + (stillCaptureSupported ? " + high-res stills" : ""))
         }
         session.delegate = self
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
@@ -786,15 +807,15 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// Enter the free-orbit phase: the operator slowly circles the face while we
     /// auto-grab one colour frame per yaw×pitch cell. Camera keeps running.
     ///
-    /// NOTE: we'd like to lock AE/AWB/focus here so texture is consistent across
-    /// the orbit, but `ARFaceTrackingConfiguration` drives the capture device
-    /// itself and exposes no `AVCaptureDevice` handle to lock — touching the
-    /// device out from under ARKit is unsupported and destabilises tracking. So
-    /// we run auto and rely on the server's winner-take-all texture projection
-    /// (which normalises per-texel) to absorb the residual exposure drift.
+    /// AE/AWB/focus are LOCKED for the duration of the orbit via iOS 16's
+    /// `configurableCaptureDeviceForPrimaryCamera` — the supported way to reach
+    /// the capture device under ARKit. Exposure drift across the sweep was the
+    /// main source of texture seams in the projected atlas.
     private func beginOrbit() {
         coverage = []
         orbitColorFrames = []
+        stillFrames = []
+        lastStillAt = nil
         orbitYaws = []
         orbitPitches = []
         coverageCells = []
@@ -803,13 +824,44 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         lastAlignedAt = nil
         phase = .orbiting
         cues.stop()   // end the hold/hunt cues; orbit uses per-frame ticks
+        setCameraLocked(true)
         statusText = phrasing(
             "Last step: slowly sweep the phone around their face — it captures as you move")
+    }
+
+    /// Lock (or restore) AE/AWB/focus on the front camera while ARKit runs.
+    private func setCameraLocked(_ locked: Bool) {
+        guard #available(iOS 16.0, *),
+              let device = ARFaceTrackingConfiguration
+                  .configurableCaptureDeviceForPrimaryCamera else { return }
+        do {
+            try device.lockForConfiguration()
+            if locked {
+                if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
+                if device.isWhiteBalanceModeSupported(.locked) { device.whiteBalanceMode = .locked }
+                if device.isFocusModeSupported(.locked) { device.focusMode = .locked }
+            } else {
+                if device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposureMode = .continuousAutoExposure
+                }
+                if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                    device.whiteBalanceMode = .continuousAutoWhiteBalance
+                }
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                }
+            }
+            device.unlockForConfiguration()
+            print("[capture] camera \(locked ? "locked" : "auto") for orbit")
+        } catch {
+            print("[capture] camera lock failed: \(error)")
+        }
     }
 
     /// Called from the UI when the operator taps Done during the orbit phase.
     func finishOrbit() {
         guard phase == .orbiting else { return }
+        setCameraLocked(false)
         session.pause()
         phase = .done
         statusText = "Saving session…"
@@ -856,9 +908,11 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         orbitYaws.append(yaw)
         orbitPitches.append(pitch)
         orbitColorFrames.append(frameCapture)
-        // Light up the coarse grid cell (progress map only — not a capture limit).
-        if let (yi, pi) = orbitBucket(yaw: yaw, pitch: pitch) {
-            coverage.insert(Self.orbitCellKey(yi, pi))
+        // Light up the coarse grid cell (progress map only — not a capture limit);
+        // a NEWLY filled cell also triggers a full-res still from that vantage.
+        if let (yi, pi) = orbitBucket(yaw: yaw, pitch: pitch),
+           coverage.insert(Self.orbitCellKey(yi, pi)).inserted {
+            captureStill(faceTransform: faceTransform)
         }
         let count = orbitColorFrames.count
         let cells = coverage
@@ -870,6 +924,40 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
             self.statusText = full
                 ? "Coverage full (\(count) photos) — tap Done"
                 : "Capturing as you sweep — \(count) photos"
+        }
+    }
+
+    /// Grab a ~12 MP still (vs the ~2 MP stream) from the current vantage. The
+    /// completion's ARFrame carries the still's OWN camera pose + intrinsics, so
+    /// its extrinsics are exact even though it lands ~100 ms after the trigger
+    /// (the face transform is world-anchored and the head is held still).
+    private func captureStill(faceTransform: simd_float4x4) {
+        guard #available(iOS 16.0, *), stillCaptureSupported else { return }
+        guard stillFrames.count < maxStillFrames else { return }
+        if let last = lastStillAt, Date().timeIntervalSince(last) < minStillInterval {
+            return
+        }
+        lastStillAt = Date()
+        session.captureHighResolutionFrame { [weak self] frame, error in
+            guard let self, let frame else {
+                if let error { print("[capture] still failed: \(error)") }
+                return
+            }
+            guard let jpeg = Self.jpegData(from: frame.capturedImage, quality: 0.9),
+                  self.stillFrames.count < self.maxStillFrames else { return }
+            let res = frame.camera.imageResolution
+            let k = frame.camera.intrinsics
+            let camToFaceCV = Self.cameraInFaceFrameCV(
+                faceTransform: faceTransform, cameraTransform: frame.camera.transform)
+            let cf = ColorFrameCapture(
+                name: String(format: "still_%03d", self.stillFrames.count), jpeg: jpeg,
+                width: Int(res.width), height: Int(res.height),
+                fx: k.columns.0.x, fy: k.columns.1.y,
+                cx: k.columns.2.x, cy: k.columns.2.y,
+                worldToCamera: camToFaceCV.inverse.scaledTranslationMM())
+            self.stillFrames.append(cf)
+            print("[capture] still \(self.stillFrames.count) "
+                  + "@ \(Int(res.width))×\(Int(res.height))")
         }
     }
 
@@ -951,7 +1039,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     private func saveSession() {
         do {
             let url = try SessionWriter.write(poses: captured,
-                                              colorFrames: orbitColorFrames,
+                                              colorFrames: orbitColorFrames + stillFrames,
                                               patientId: patientId)
             finishedSession = url
             statusText = "Captured ✓ — ready to upload from Sessions tab"
@@ -963,11 +1051,12 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     /// JPEG-encode an ARFrame's RGB buffer (camera-native landscape orientation).
-    private static func jpegData(from pixelBuffer: CVPixelBuffer) -> Data? {
+    private static func jpegData(from pixelBuffer: CVPixelBuffer,
+                                 quality: Double = 0.9) -> Data? {
         let image = CIImage(cvPixelBuffer: pixelBuffer)
         return ciContext.jpegRepresentation(
             of: image, colorSpace: CGColorSpaceCreateDeviceRGB(),
-            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.85])
+            options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: quality])
     }
 
     // MARK: - geometry helpers
