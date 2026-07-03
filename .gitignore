@@ -1,0 +1,17 @@
+.venv/
+.venv-mp/
+__pycache__/
+.DS_Store
+server/data/
+phase0/results/
+ios-app/VectraCapture.xcodeproj/
+compare-out/
+
+# clinical patient photos — never commit
+Vectra-files/
+Example-Output/
+
+# large generated outputs and vendored tooling
+VECTRA-SOFTWARE-ONLY/outputs/
+tools/photogrammetry/
+VECTRA-SOFTWARE-ONLY/tools/face_landmarker.task

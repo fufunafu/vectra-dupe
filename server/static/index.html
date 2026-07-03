@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vectra-dupe — facial volume analysis</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:        #0d1117;
+    --bg-2:      #11161d;
+    --surface:   #161d26;
+    --surface-2: #1c2531;
+    --hairline:  #ffffff14;
+    --ink:       #e8edf2;
+    --muted:     #8b97a5;
+    --faint:     #5d6b7a;
+    --accent:    #39ccbc;
+    --accent-br: #66ebd6;
+    --accent-dp: #0f6b7e;
+    --pos:       #ff8a65;
+    --neg:       #64b5f6;
+    --danger:    #f87171;
+    --ok:        #51d98c;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; display: flex; height: 100vh; overflow: hidden;
+         font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; }
+
+  /* ---------- sidebar ---------- */
+  #sidebar { width: var(--sidebar-w, 372px); flex: none; padding: 0; overflow-y: auto;
+             background: linear-gradient(180deg, #121821, #0e131a 60%); }
+  /* draggable divider between sidebar and viewport */
+  #resizer { flex: none; width: 6px; cursor: col-resize; background: var(--hairline);
+             transition: background .15s; position: relative; z-index: 5; }
+  #resizer:hover, #resizer.dragging { background: var(--accent, #3b82f6); }
+  body.resizing { cursor: col-resize; user-select: none; }
+  #sidebar::-webkit-scrollbar { width: 9px; }
+  #sidebar::-webkit-scrollbar-thumb { background: #2a3340; border-radius: 6px;
+             border: 2px solid transparent; background-clip: padding-box; }
+  .pad { padding: 0 18px; }
+
+  .brand { display: flex; align-items: center; gap: 11px;
+           padding: 18px 18px 16px; position: sticky; top: 0; z-index: 5;
+           background: linear-gradient(180deg, #121821ee, #121821cc);
+           backdrop-filter: blur(12px); border-bottom: 1px solid var(--hairline); }
+  .brand-mark { width: 34px; height: 34px; border-radius: 10px; flex: none;
+           display: grid; place-items: center; color: #04201f; font-size: 18px;
+           background: linear-gradient(135deg, var(--accent-br), var(--accent-dp));
+           box-shadow: 0 4px 14px #39ccbc55; }
+  .brand h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  .brand .sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+       color: var(--muted); margin: 22px 0 9px; font-weight: 700; }
+
+  select, button, input { font: inherit; color: var(--ink);
+       background: var(--surface-2); border: 1px solid #2a3340;
+       border-radius: 9px; padding: 9px 11px; outline: none; transition: .15s; }
+  input::placeholder { color: var(--faint); }
+  input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px #39ccbc22; }
+  button { cursor: pointer; }
+  button:hover { background: #232e3c; border-color: #38465a; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #042422;
+       font-weight: 700; box-shadow: 0 4px 12px #39ccbc40; }
+  button.primary:hover { background: var(--accent-br); border-color: var(--accent-br); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; margin: 8px 0; align-items: center; flex-wrap: wrap; }
+
+  /* ---------- session / result cards ---------- */
+  .item { padding: 12px 13px; margin: 9px 0; background: var(--surface);
+          border-radius: 12px; border: 1px solid var(--hairline);
+          transition: border-color .15s, transform .05s; }
+  .item.clickable { cursor: pointer; }
+  .item.clickable:hover { border-color: var(--accent); }
+  .item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .item-head { display: flex; align-items: flex-start; gap: 10px; }
+  .item-ico { width: 34px; height: 34px; border-radius: 9px; flex: none;
+          display: grid; place-items: center; font-size: 15px;
+          background: #39ccbc1f; color: var(--accent); }
+  .item-body { flex: 1; min-width: 0; }
+  .lbl { font-weight: 600; font-size: 14px; letter-spacing: -0.01em;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub-id { color: var(--faint); font-size: 11px; font-family: ui-monospace, Menlo, monospace;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .muted { color: var(--muted); font-size: 12px; }
+
+  .pill { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 20px;
+          white-space: nowrap; letter-spacing: .02em; }
+  .pill.ok    { background: #51d98c22; color: var(--ok); }
+  .pill.wait  { background: #ffc35322; color: #ffc353; }
+
+  .item-actions { display: flex; gap: 7px; margin-top: 11px; }
+  .item-actions button { flex: 1; padding: 8px; font-size: 12.5px; font-weight: 600; }
+  .icon-btn { flex: none !important; width: 38px; display: grid; place-items: center; }
+  .icon-btn.danger { color: var(--danger); }
+  .icon-btn.danger:hover { background: #f8717119; border-color: #f8717155; }
+
+  .vol-pos { color: var(--pos); font-weight: 700; }
+  .vol-neg { color: var(--neg); font-weight: 700; }
+  .insig { opacity: .5; }
+
+  .empty { color: var(--muted); font-size: 12.5px; padding: 10px 2px; }
+
+  /* ---------- viewport ---------- */
+  #viewport { flex: 1; position: relative; background:
+       radial-gradient(120% 120% at 50% 0%, #161d26 0%, #0b0f14 70%); }
+  #canvas-host { position: absolute; inset: 0; }
+  #status { position: absolute; left: 18px; top: 16px; font-size: 12.5px;
+       color: var(--muted); background: #0d1117aa; padding: 6px 11px;
+       border-radius: 8px; border: 1px solid var(--hairline); backdrop-filter: blur(6px); }
+  #legend-wrap { position: absolute; right: 18px; bottom: 18px; display: flex;
+       align-items: stretch; gap: 8px; height: 190px; }
+  #legend-labels { display: flex; flex-direction: column; justify-content: space-between;
+       font-size: 11px; color: var(--muted); text-align: right; }
+  #legend { width: 16px; border-radius: 5px; border: 1px solid var(--hairline);
+       background: linear-gradient(to top, #2166ac, #f7f7f7, #b2182b); }
+  #legend-title { position: absolute; right: 18px; bottom: 214px; font-size: 10px;
+       letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  /* Smooth / Textured display toggle (instant; no reprocessing) */
+  #view-toggle { position: absolute; right: 18px; top: 16px; display: flex; gap: 0;
+       background: #0d1117aa; border: 1px solid var(--hairline); border-radius: 9px;
+       overflow: hidden; backdrop-filter: blur(6px); }
+  #view-toggle button { border: none; background: transparent; color: var(--muted);
+       font-size: 12px; font-weight: 600; padding: 7px 13px; cursor: pointer; }
+  #view-toggle button + button { border-left: 1px solid var(--hairline); }
+  #view-toggle button.active { background: var(--accent); color: #03201d; }
+
+  /* Reprocess / process progress overlay (time-based; OC runs ~2–3 min) */
+  #progress-overlay { position: absolute; inset: 0; display: none;
+       align-items: center; justify-content: center; z-index: 20;
+       background: #0b0f14cc; backdrop-filter: blur(4px); }
+  #progress-card { width: min(360px, 72%); background: var(--surface);
+       border: 1px solid var(--hairline); border-radius: 14px; padding: 20px 22px;
+       box-shadow: 0 14px 44px #0009; }
+  #progress-label { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+  #progress-track { height: 8px; border-radius: 6px; background: var(--surface-2);
+       overflow: hidden; margin: 14px 0 9px; }
+  #progress-bar { height: 100%; width: 0%; border-radius: 6px;
+       background: linear-gradient(90deg, var(--accent), var(--accent-br));
+       transition: width .25s ease-out; }
+  #progress-meta { display: flex; justify-content: space-between;
+       font-size: 11.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="sidebar">
+  <div class="brand">
+    <div class="brand-mark">◆</div>
+    <div>
+      <h1>Vectra-dupe</h1>
+      <div class="sub">3D facial volume analysis</div>
+    </div>
+  </div>
+
+  <div class="pad">
+    <h2>Patient</h2>
+    <div class="row">
+      <select id="patient-select" style="flex:1"></select>
+    </div>
+    <div class="row">
+      <input id="new-patient-name" placeholder="New patient name" style="flex:1">
+      <button id="add-patient">Add</button>
+    </div>
+
+    <h2>Sessions</h2>
+    <div id="sessions"></div>
+
+    <h2>Compare</h2>
+    <div class="row">
+      <select id="before-select" style="flex:1"></select>
+    </div>
+    <div class="row">
+      <select id="after-select" style="flex:1"></select>
+      <button id="run-compare" class="primary">Compare</button>
+    </div>
+
+    <h2>Results</h2>
+    <div id="compares"></div>
+    <div style="height: 24px"></div>
+  </div>
+</div>
+
+<div id="resizer" title="Drag to resize · double-click to reset"></div>
+
+<div id="viewport">
+  <div id="canvas-host"></div>
+  <div id="status">no mesh loaded</div>
+  <div id="view-toggle" title="Switch display — no reprocessing">
+    <button data-mode="smooth">Smooth</button>
+    <button data-mode="textured">Textured</button>
+  </div>
+  <div id="progress-overlay">
+    <div id="progress-card">
+      <div id="progress-label">Reconstructing…</div>
+      <div id="progress-track"><div id="progress-bar"></div></div>
+      <div id="progress-meta">
+        <span id="progress-elapsed">0:00 elapsed · ~2–3 min</span>
+        <span id="progress-pct">0%</span>
+      </div>
+    </div>
+  </div>
+  <div id="legend-title">Δ surface</div>
+  <div id="legend-wrap">
+    <div id="legend-labels"><span>+2.5 mm</span><span>0</span><span>−2.5 mm</span></div>
+    <div id="legend"></div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const api = (path, opts) => fetch(path, opts).then(async r => {
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.status === 204 ? {} : r.json();
+});
+const el = id => document.getElementById(id);
+const status = msg => { el('status').textContent = msg; };
+
+// Time-based progress overlay for the long (~2–3 min) reconstruction. The server
+// call is synchronous (?wait=true) and reports no percentage, so we ease an
+// animated bar toward ~95% over `expectedMs`, holding there until the request
+// resolves, then snap to 100%. Returns a finish() to call in a finally block.
+let _progTimer = null;
+function startProgress(label = 'Reconstructing…', expectedMs = 150000) {
+  const bar = el('progress-bar'), pct = el('progress-pct'), elapsed = el('progress-elapsed');
+  el('progress-label').textContent = label;
+  el('progress-overlay').style.display = 'flex';
+  bar.style.width = '0%'; pct.textContent = '0%';
+  const t0 = performance.now();
+  if (_progTimer) clearInterval(_progTimer);
+  const tick = () => {
+    const ms = performance.now() - t0;
+    const frac = 0.95 * (1 - Math.exp(-ms / expectedMs));   // asymptote at 95%
+    bar.style.width = (frac * 100).toFixed(1) + '%';
+    pct.textContent = Math.round(frac * 100) + '%';
+    const s = Math.floor(ms / 1000);
+    elapsed.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} elapsed · ~2–3 min`;
+  };
+  tick();
+  _progTimer = setInterval(tick, 200);
+  return () => {
+    if (_progTimer) { clearInterval(_progTimer); _progTimer = null; }
+    bar.style.width = '100%'; pct.textContent = '100%';
+    setTimeout(() => { el('progress-overlay').style.display = 'none'; bar.style.width = '0%'; }, 400);
+  };
+}
+
+// Render an ISO-ish session label (2026-06-27T17-36-49Z) as a friendly date.
+function prettyDate(label) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})Z?$/.exec(label || '');
+  if (!m) return label;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  if (isNaN(d)) return label;
+  return d.toLocaleString(undefined,
+    { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+// ---------- 3D viewport ----------
+const host = el('canvas-host');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+host.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0f14);
+const camera = new THREE.PerspectiveCamera(40, 1, 1, 5000);
+camera.position.set(0, 0, 420);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const key = new THREE.DirectionalLight(0xffffff, 1.35); key.position.set(0.4, 0.6, 1);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.5); fill.position.set(-0.6, 0.1, 0.4);
+scene.add(fill);
+let meshObj = null;
+
+function resize() {
+  const w = host.clientWidth, h = host.clientHeight;
+  renderer.setSize(w, h); renderer.setPixelRatio(devicePixelRatio);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(host); resize();
+(function animate() { requestAnimationFrame(animate); controls.update();
+  renderer.render(scene, camera); })();
+
+// ---------- resizable sidebar ----------
+(function setupResizer() {
+  const DEFAULT_W = 372, MIN_W = 260, MAX_W = 720;
+  const resizer = el('resizer');
+  const clamp = w => Math.max(MIN_W, Math.min(MAX_W, w));
+  const apply = w => document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+  const saved = parseInt(localStorage.getItem('sidebarWidth'), 10);
+  if (saved) apply(clamp(saved));
+  let dragging = false;
+  resizer.addEventListener('pointerdown', e => {
+    dragging = true; resizer.setPointerCapture(e.pointerId);
+    resizer.classList.add('dragging'); document.body.classList.add('resizing');
+    e.preventDefault();
+  });
+  resizer.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const w = clamp(e.clientX);   // sidebar starts at viewport left edge (x=0)
+    apply(w);
+  });
+  const stop = () => {
+    if (!dragging) return;
+    dragging = false; resizer.classList.remove('dragging');
+    document.body.classList.remove('resizing');
+    const w = parseInt(getComputedStyle(document.documentElement)
+      .getPropertyValue('--sidebar-w'), 10);
+    if (w) localStorage.setItem('sidebarWidth', w);
+  };
+  resizer.addEventListener('pointerup', stop);
+  resizer.addEventListener('pointercancel', stop);
+  resizer.addEventListener('dblclick', () => {
+    apply(DEFAULT_W); localStorage.setItem('sidebarWidth', DEFAULT_W);
+  });
+})();
+
+function clearMesh() {
+  if (!meshObj) return;
+  scene.remove(meshObj);
+  meshObj.traverse(o => {
+    if (o.isMesh) { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }
+  });
+  meshObj = null;
+}
+
+// Prefer the textured GLB (full-resolution UV atlas); fall back to the
+// per-vertex-coloured PLY if it isn't there (older sessions / texture failed).
+// Display representation, toggled in the viewport (no reprocessing — both GLBs
+// are written once by the server and swapped here instantly).
+let displayMode = localStorage.getItem('displayMode') || 'smooth';  // 'smooth' | 'textured'
+let currentBase = null, currentLabel = null;
+
+function loadModel(baseUrl, label) {
+  currentBase = baseUrl; currentLabel = label;
+  // Bust the browser cache: the mesh files keep the same URL across reprocesses,
+  // so without a changing query string a refresh re-loads the STALE cached mesh
+  // (old texture/geometry) and the user never sees the new result.
+  const bust = '?t=' + Date.now();
+  // Textured tries mesh_textured.glb then falls back to the smooth glb (old
+  // sessions have no textured glb); both fall back to mesh.ply.
+  const glbs = (displayMode === 'textured'
+    ? ['/mesh_textured.glb', '/mesh.glb'] : ['/mesh.glb'])
+    .map(p => baseUrl + p + bust);
+  loadGlb(glbs, baseUrl + '/mesh.ply' + bust, label);
+}
+
+// Reload whatever model is showing in the current displayMode (after a toggle).
+function reloadCurrent() {
+  if (currentBase) loadModel(currentBase, currentLabel);
+}
+
+// Smooth / Textured toggle: swaps the on-disk GLB instantly (no reprocessing).
+(function setupViewToggle() {
+  const tog = el('view-toggle');
+  const sync = () => tog.querySelectorAll('button').forEach(
+    b => b.classList.toggle('active', b.dataset.mode === displayMode));
+  tog.querySelectorAll('button').forEach(b => b.onclick = () => {
+    if (displayMode === b.dataset.mode) return;
+    displayMode = b.dataset.mode;
+    localStorage.setItem('displayMode', displayMode);
+    sync(); reloadCurrent();
+  });
+  sync();
+})();
+
+function loadGlb(urls, fallbackUrl, label) {
+  status('loading ' + label + ' …');
+  const url = Array.isArray(urls) ? urls[0] : urls;
+  const onErr = () => {
+    if (Array.isArray(urls) && urls.length > 1) loadGlb(urls.slice(1), fallbackUrl, label);
+    else loadPly(fallbackUrl, label);
+  };
+  new GLTFLoader().load(url, gltf => {
+    clearMesh();
+    meshObj = gltf.scene;
+    // Render the photo texture UNLIT (like the phone viewer's .constant): the
+    // baked albedo already contains real lighting, so re-lighting it over the
+    // slightly bumpy TrueDepth surface only adds shading noise that reads as a
+    // soft/blurry face. MeshBasic shows the texture exactly as photographed.
+    meshObj.traverse(o => {
+      if (!o.isMesh) return;
+      const map = o.material.map;
+      if (map) map.colorSpace = THREE.SRGBColorSpace;
+      // The GLB now carries seamless per-vertex colour (no UV atlas, so no chart
+      // seams). Render it unlit: the baked colour already contains real lighting,
+      // and re-shading the bumpy TrueDepth surface only adds noise. If an older
+      // textured GLB is loaded it still works via `map`.
+      // Use the texture if present (cylindrical mode); otherwise fall back to
+      // per-vertex colour (vertex mode). Never both — a map multiplied by vertex
+      // colour would darken the result.
+      const hasColor = !map && !!(o.geometry && o.geometry.attributes.color);
+      o.material = new THREE.MeshBasicMaterial({
+        map, vertexColors: hasColor, side: THREE.DoubleSide });
+    });
+    const box = new THREE.Box3().setFromObject(meshObj);
+    const c = box.getCenter(new THREE.Vector3());
+    meshObj.position.set(-c.x, -c.y, -c.z);
+    scene.add(meshObj);
+    status(label);
+  }, undefined, onErr);
+}
+
+function loadPly(url, label) {
+  status('loading ' + label + ' …');
+  new PLYLoader().load(url, geo => {
+    geo.computeVertexNormals();
+    clearMesh();
+    const hasColor = !!geo.attributes.color;
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: hasColor, color: hasColor ? 0xffffff : 0xb9a08c,
+      roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide });
+    meshObj = new THREE.Mesh(geo, mat);
+    geo.computeBoundingSphere();
+    const c = geo.boundingSphere.center;
+    meshObj.position.set(-c.x, -c.y, -c.z);
+    scene.add(meshObj);
+    status(label);
+  }, undefined, err => status('failed to load mesh: ' + err));
+}
+
+// ---------- data + UI ----------
+let patientId = null;
+let activeKey = null;   // which card is highlighted as loaded
+
+async function refreshPatients() {
+  const patients = await api('/api/patients');
+  const sel = el('patient-select');
+  sel.innerHTML = '';
+  for (const p of patients) {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.name;
+    sel.appendChild(o);
+  }
+  if (patients.length && !patientId) patientId = patients[0].id;
+  if (patientId) sel.value = patientId;
+  await refreshSessions();
+}
+
+async function refreshSessions() {
+  const sessionsDiv = el('sessions'), beforeSel = el('before-select'),
+        afterSel = el('after-select'), comparesDiv = el('compares');
+  sessionsDiv.innerHTML = beforeSel.innerHTML = afterSel.innerHTML =
+    comparesDiv.innerHTML = '';
+  if (!patientId) return;
+
+  const sessions = await api(`/api/patients/${patientId}/sessions`);
+  if (!sessions.length) {
+    sessionsDiv.innerHTML = '<div class="empty">No captures yet for this patient.</div>';
+  }
+  for (const s of sessions) {
+    const d = document.createElement('div');
+    const key = `s:${s.id}`;
+    d.className = 'item' + (s.processed ? ' clickable' : '') + (activeKey === key ? ' active' : '');
+
+    const head = document.createElement('div');
+    head.className = 'item-head';
+    head.innerHTML = `
+      <div class="item-ico">◈</div>
+      <div class="item-body">
+        <div class="lbl">${prettyDate(s.label)}</div>
+        <div class="sub-id">${s.id}${s.patient_id ? ' · ' + s.patient_id : ''}</div>
+      </div>
+      <div class="pill ${s.processed ? 'ok' : 'wait'}">${s.processed ? 'Processed' : 'Pending'}</div>`;
+    d.appendChild(head);
+
+    if (s.processed) {
+      d.onclick = () => { activeKey = key;
+        loadModel(`/files/${patientId}/sessions/${s.id}`, `session · ${prettyDate(s.label)}`);
+        refreshSessions(); };
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'item-actions';
+    if (!s.processed) {
+      const b = document.createElement('button');
+      b.className = 'primary'; b.textContent = 'Process';
+      b.onclick = async e => { e.stopPropagation(); b.disabled = true; b.textContent = 'processing…';
+        const done = startProgress('Reconstructing…');
+        try { await api(`/api/patients/${patientId}/sessions/${s.id}/process?wait=true`, { method: 'POST' });
+              await refreshSessions(); }
+        catch (err) { alert(err.message); b.disabled = false; b.textContent = 'Process'; }
+        finally { done(); } };
+      actions.appendChild(b);
+    } else {
+      const v = document.createElement('button');
+      v.textContent = 'View 3D';
+      v.onclick = e => { e.stopPropagation(); activeKey = key;
+        loadModel(`/files/${patientId}/sessions/${s.id}`, `session · ${prettyDate(s.label)}`);
+        refreshSessions(); };
+      actions.appendChild(v);
+      // Re-run the pipeline on the already-uploaded raw data (e.g. after a
+      // pipeline change) without re-capturing. This builds BOTH display variants
+      // (smooth per-vertex + cylindrical photo texture) in one pass; switch
+      // between them instantly with the Smooth/Textured toggle in the viewer — no
+      // reprocessing needed. Measurement (mesh.ply) is identical for both.
+      const rp = document.createElement('button');
+      rp.textContent = 'Reprocess';
+      rp.onclick = async e => { e.stopPropagation(); rp.disabled = true;
+        const prev = rp.textContent; rp.textContent = 'reprocessing…';
+        const done = startProgress('Reprocessing…');
+        try {
+          await api(`/api/patients/${patientId}/sessions/${s.id}/process?wait=true`, { method: 'POST' });
+          await refreshSessions();
+          if (activeKey === key)
+            loadModel(`/files/${patientId}/sessions/${s.id}`, `session · ${prettyDate(s.label)}`);
+        } catch (err) { alert(err.message); rp.disabled = false; rp.textContent = prev; }
+        finally { done(); } };
+      actions.appendChild(rp);
+    }
+    const del = document.createElement('button');
+    del.className = 'icon-btn danger'; del.title = 'Delete session'; del.textContent = '🗑';
+    del.onclick = async e => { e.stopPropagation();
+      if (!confirm(`Delete this session?\n\n${prettyDate(s.label)}\n\nThis removes the capture and any comparisons that used it. This cannot be undone.`)) return;
+      del.disabled = true;
+      try { await api(`/api/patients/${patientId}/sessions/${s.id}`, { method: 'DELETE' });
+            if (activeKey === key) { clearMesh(); status('no mesh loaded'); activeKey = null; }
+            await refreshSessions(); }
+      catch (err) { alert(err.message); del.disabled = false; } };
+    actions.appendChild(del);
+    d.appendChild(actions);
+
+    sessionsDiv.appendChild(d);
+    for (const sel of [beforeSel, afterSel]) {
+      const o = document.createElement('option');
+      o.value = s.id; o.textContent = prettyDate(s.label); o.disabled = !s.processed;
+      sel.appendChild(o);
+    }
+  }
+  if (afterSel.options.length > 1) afterSel.selectedIndex = afterSel.options.length - 1;
+
+  const compares = await api(`/api/patients/${patientId}/compares`);
+  if (!compares.length) {
+    comparesDiv.innerHTML = '<div class="empty">Run a comparison to see volume changes.</div>';
+  }
+  for (const c of compares) {
+    const d = document.createElement('div');
+    const key = `c:${c.id}`;
+    d.className = 'item clickable' + (activeKey === key ? ' active' : '');
+    const net = c.net_significant_volume_ml;
+    const cls = net >= 0 ? 'vol-pos' : 'vol-neg';
+    const rows = (c.regions || []).map(r =>
+      `<div class="${r.significant ? '' : 'insig'}" style="margin-top:3px">
+         ${r.significant ? '●' : '○'} ${r.volume_ml >= 0 ? '+' : ''}${r.volume_ml} mL
+         <span class="muted">(peak ${r.peak_mm} mm${r.significant ? '' : ', below noise floor'})</span>
+       </div>`).join('') || '<div class="muted">no change detected</div>';
+    d.innerHTML = `
+      <div class="lbl" style="font-size:13px">${prettyDate(c.before)} → ${prettyDate(c.after)}</div>
+      <div style="margin-top:4px">net: <span class="${cls}">${net >= 0 ? '+' : ''}${net} mL</span></div>
+      ${rows}
+      <div class="muted" style="margin-top:8px">click to view heatmap ·
+        <a href="/files/${patientId}/compares/${c.id}/heatmap.png" target="_blank"
+           style="color:var(--accent)">2D map</a></div>`;
+    d.onclick = () => { activeKey = key;
+      loadPly(`/files/${patientId}/compares/${c.id}/heatmap.ply`,
+              `compare · ${prettyDate(c.before)} → ${prettyDate(c.after)}`);
+      refreshSessions(); };
+    comparesDiv.appendChild(d);
+  }
+}
+
+el('add-patient').onclick = async () => {
+  const name = el('new-patient-name').value.trim();
+  if (!name) return;
+  const p = await api('/api/patients', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+  patientId = p.id; el('new-patient-name').value = '';
+  await refreshPatients();
+};
+el('new-patient-name').addEventListener('keydown', e => { if (e.key === 'Enter') el('add-patient').click(); });
+el('patient-select').onchange = async e => { patientId = e.target.value; activeKey = null;
+  await refreshSessions(); };
+el('run-compare').onclick = async () => {
+  const before = el('before-select').value, after = el('after-select').value;
+  if (!before || !after || before === after) { alert('Pick two different sessions to compare.'); return; }
+  const btn = el('run-compare'); btn.disabled = true; btn.textContent = 'comparing…';
+  try {
+    await api(`/api/patients/${patientId}/compare`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ before, after }) });
+    await refreshSessions();
+  } catch (err) { alert(err.message); }
+  btn.disabled = false; btn.textContent = 'Compare';
+};
+
+refreshPatients().catch(err => status(err.message));
+</script>
+</body>
+</html>

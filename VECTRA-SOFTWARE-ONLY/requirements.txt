@@ -1,0 +1,13 @@
+# Classical SfM + learned dense reconstruction pipeline (macOS / Apple Silicon)
+numpy
+scipy
+opencv-python
+pillow
+trimesh
+open3d
+pycolmap          # classical Structure-from-Motion (camera poses + sparse points)
+torch             # MPS-accelerated learned depth
+torchvision
+transformers      # Depth Anything V2 model
+huggingface_hub
+matplotlib        # comparison sheets

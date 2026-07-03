@@ -1,0 +1,30 @@
+name: VectraCapture
+options:
+  bundleIdPrefix: com.vectradupe
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  VectraCapture:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    info:
+      path: Sources/Info.plist
+      properties:
+        NSCameraUsageDescription: >-
+          The TrueDepth camera captures 3D scans of the face for volume
+          analysis.
+        NSLocalNetworkUsageDescription: >-
+          Uploads your face scans to the vectra-dupe processing server running
+          on your local network.
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # Allow plain-HTTP uploads to the local-network processing server.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vectradupe.capture
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Automatic

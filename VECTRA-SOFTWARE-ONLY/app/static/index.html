@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vectra-Dupe</title>
+<style>
+  :root { --bg:#15171c; --panel:#1d2027; --line:#2c303a; --accent:#4f8cff; --text:#e6e8ec; --muted:#9aa3b2; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:12px; padding:12px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:15px; font-weight:600; margin:0 12px 0 0; letter-spacing:.2px; }
+  select, button { font:inherit; color:var(--text); background:#262a33; border:1px solid var(--line);
+                   border-radius:8px; padding:7px 12px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  .spacer { flex:1; }
+  .tabs button { border-radius:8px; }
+  .tabs button.active { background:#323844; }
+  main { flex:1; display:flex; min-height:0; }
+  #stage { flex:1; position:relative; background:radial-gradient(circle at 50% 35%, #23262e, #121317); }
+  #canvas-wrap, #compare-wrap { position:absolute; inset:0; }
+  #compare-wrap { display:none; overflow:auto; background:#0e0f13; }
+  #compare-wrap img { width:100%; display:block; }
+  #hint { position:absolute; bottom:10px; left:0; right:0; text-align:center; color:var(--muted); font-size:12px; pointer-events:none; }
+  aside { width:300px; border-left:1px solid var(--line); background:var(--panel); padding:16px; overflow:auto; }
+  aside h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:0 0 10px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td { padding:7px 0; border-bottom:1px solid var(--line); }
+  td.val { text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+  td.val span { color:var(--muted); font-weight:400; font-size:11px; margin-left:3px; }
+  .note { font-size:11px; color:var(--muted); margin-top:14px; line-height:1.5; }
+  #progress { display:none; padding:10px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+  #bar { height:6px; background:#262a33; border-radius:4px; overflow:hidden; }
+  #fill { height:100%; width:0%; background:var(--accent); transition:width .4s; }
+  #pmsg { font-size:12px; color:var(--muted); margin-top:6px; }
+  .empty { color:var(--muted); font-size:13px; padding:24px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Vectra-Dupe</h1>
+  <select id="visit"></select>
+  <button id="run" class="primary">Reconstruct</button>
+  <div class="spacer"></div>
+  <div class="tabs">
+    <button id="tab3d" class="active">3D Model</button>
+    <button id="tabcmp">Vectra comparison</button>
+  </div>
+</header>
+<div id="progress"><div id="bar"><div id="fill"></div></div><div id="pmsg"></div></div>
+<main>
+  <div id="stage">
+    <div id="canvas-wrap"></div>
+    <div id="compare-wrap"><img id="cmpimg" /></div>
+    <div id="hint">drag to rotate · scroll to zoom</div>
+  </div>
+  <aside>
+    <h2>Measurements</h2>
+    <table id="measures"><tbody><tr><td class="empty" colspan="2">No model loaded</td></tr></tbody></table>
+    <div class="note" id="scalenote"></div>
+  </aside>
+</main>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+
+const $ = (id) => document.getElementById(id);
+const LABELS = {
+  interpupillary_distance:["Interpupillary dist.","(assumed)"],
+  bizygomatic_face_width:["Face width",""], morphological_face_height:["Face height",""],
+  nose_length:["Nose length",""], nose_width:["Nose width",""],
+  mouth_width:["Mouth width",""], outer_eye_width:["Eye width",""],
+};
+
+// ---- three.js scene ----
+const wrap = $("canvas-wrap");
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(devicePixelRatio); wrap.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(0.4,0.6,1); scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.4); fill.position.set(-0.6,0.2,0.5); scene.add(fill);
+let mesh = null;
+
+function resize() {
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w/h; camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize);
+function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); }
+loop();
+
+function loadMesh(visit) {
+  new PLYLoader().load(`/api/result/${encodeURIComponent(visit)}/mesh.ply?t=${Date.now()}`, (geo) => {
+    if (mesh) { scene.remove(mesh); mesh.geometry.dispose(); }
+    geo.computeVertexNormals();
+    geo.computeBoundingBox();
+    const c = new THREE.Vector3(); geo.boundingBox.getCenter(c); geo.translate(-c.x,-c.y,-c.z);
+    const size = new THREE.Vector3(); geo.boundingBox.getSize(size);
+    const s = 1.6 / Math.max(size.x,size.y,size.z); geo.scale(s,s,s);
+    const mat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.85, metalness:0.0, flatShading:false });
+    mesh = new THREE.Mesh(geo, mat); scene.add(mesh);
+    camera.position.set(0, 0, 3.0); controls.target.set(0,0,0); controls.update();
+    resize();
+  });
+}
+
+// ---- measurements ----
+async function loadMeasures(visit) {
+  const tb = $("measures").querySelector("tbody");
+  try {
+    const m = await (await fetch(`/api/result/${encodeURIComponent(visit)}/measurements?t=${Date.now()}`)).json();
+    if (m.error) throw 0;
+    tb.innerHTML = "";
+    for (const [k,[label,suffix]] of Object.entries(LABELS)) {
+      const v = m.measures_mm[k];
+      tb.innerHTML += `<tr><td>${label}</td><td class="val">${v==null?"–":v}<span>mm ${suffix}</span></td></tr>`;
+    }
+    $("scalenote").textContent = "Scale anchored to assumed inter-pupillary distance (~63 mm); absolute sizes ±~5%, relative change between visits more reliable.";
+  } catch { tb.innerHTML = `<tr><td class="empty" colspan="2">No measurements yet</td></tr>`; $("scalenote").textContent=""; }
+}
+
+// ---- visits + tabs ----
+async function loadVisits() {
+  const visits = await (await fetch("/api/visits")).json();
+  const sel = $("visit"); sel.innerHTML = "";
+  visits.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v.name; o.textContent = `${v.name}  (${v.photos} photos)${v.has_mesh?" ✓":""}`;
+    sel.appendChild(o);
+  });
+  if (visits.length) selectVisit(sel.value);
+}
+function selectVisit(v) {
+  $("cmpimg").src = `/api/result/${encodeURIComponent(v)}/comparison.png?t=${Date.now()}`;
+  fetch(`/api/result/${encodeURIComponent(v)}/mesh.ply`, {method:"HEAD"}).then(r => { if (r.ok) loadMesh(v); });
+  loadMeasures(v);
+}
+$("visit").addEventListener("change", e => selectVisit(e.target.value));
+$("tab3d").onclick = () => switchTab(true);
+$("tabcmp").onclick = () => switchTab(false);
+function switchTab(threeD) {
+  $("tab3d").classList.toggle("active", threeD); $("tabcmp").classList.toggle("active", !threeD);
+  $("canvas-wrap").style.display = threeD?"block":"none";
+  $("compare-wrap").style.display = threeD?"none":"block";
+  $("hint").style.display = threeD?"block":"none";
+  if (threeD) resize();
+}
+
+// ---- reconstruct job ----
+$("run").onclick = async () => {
+  const visit = $("visit").value; if (!visit) return;
+  $("run").disabled = true; $("progress").style.display = "block";
+  const { job_id } = await (await fetch("/api/reconstruct", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ visit })
+  })).json();
+  const poll = setInterval(async () => {
+    const j = await (await fetch(`/api/job/${job_id}`)).json();
+    $("fill").style.width = (j.progress||0) + "%";
+    $("pmsg").textContent = j.message || "";
+    if (j.status === "done") {
+      clearInterval(poll); $("run").disabled = false;
+      $("pmsg").textContent = "Complete"; setTimeout(()=>$("progress").style.display="none", 1500);
+      selectVisit(visit); loadVisits();
+    } else if (j.status === "error") {
+      clearInterval(poll); $("run").disabled = false;
+      $("pmsg").textContent = "Error: " + (j.error||"failed");
+    }
+  }, 1500);
+};
+
+loadVisits();
+</script>
+</body>
+</html>
