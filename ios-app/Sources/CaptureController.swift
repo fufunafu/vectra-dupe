@@ -35,10 +35,13 @@ struct ColorFrameCapture {
     let worldToCamera: simd_double4x4   // face-frame -> CV camera frame, mm
 }
 
-/// Guidance + capture state machine around an ARFaceTrackingConfiguration
-/// session. "World" for the saved session is the face anchor frame at each
-/// capture (x subject-right, y up, z out of the face), so it does not matter
-/// whether the user turns their head or moves the phone between poses.
+/// Guidance + capture state machine around an ARSession. The camera-specific
+/// half (front TrueDepth face tracking vs rear world tracking + LiDAR) lives
+/// behind `CaptureBackend`; this class owns the shared pose sequence, gates,
+/// burst averaging, orbit harvest, and session writing. "World" for the saved
+/// session is the head-centered frame at each capture (x subject-right, y up,
+/// z out of the face) — the face anchor on the front camera, a Vision-placed
+/// head anchor on the rear.
 final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     enum Pose: Int, CaseIterable {
         // Nine depth keyframes covering wider arcs than the original five:
@@ -78,6 +81,13 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         /// True once the camera is past where ARKit can still track the face, so
         /// the capture relies on the locked face frame instead of a live anchor.
         var needsLockedFrame: Bool { abs(targetYawDeg) > 40 }
+        /// Extra yaw tolerance for the ear views: they're captured blind on the
+        /// dead-reckoned frame at ±80°, where hunting a ±12° window one-handed
+        /// is maddening — and their depth adds the least (the orbit photos
+        /// cover ears photogrammetrically). Field-tested pain point.
+        var yawTolBonusDeg: Float {
+            self == .earLeft || self == .earRight ? 6 : 0
+        }
         var instruction: String {
             switch self {
             case .front: return "Look straight ahead and hold still"
@@ -122,35 +132,54 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// the Settings toggle by the view.
     let cues = CaptureCues()
 
-    /// Selfie capture (default): the operator IS the subject, so cues read "your
-    /// left/right". Operator mode (filming someone else) keeps "their …". Set by
-    /// the view from the Selfie/Operator toggle.
-    var isSelfie = true
+    /// Which camera pipeline runs: Selfie = front TrueDepth (the operator IS
+    /// the subject, cues read "your left/right"); Operator = rear camera
+    /// filming someone else ("their …"). Set by the view from the toggle.
+    @Published private(set) var mode: CaptureMode = .selfieFront
+    /// Camera-specific half of the capture (nil until a preview starts, or on
+    /// devices that can't run the selected mode).
+    private var backend: CaptureBackend?
+
+    /// Switch camera pipelines. Ignored mid-capture (the view disables the
+    /// toggle then); restarts the live preview so the new camera shows.
+    func setMode(_ newMode: CaptureMode) {
+        guard newMode != mode else { return }
+        switch phase {
+        case .idle, .preview, .done: break
+        default: return
+        }
+        mode = newMode
+        guard !isDemo else { return }
+        if captureSupported {
+            startPreview()
+        } else {
+            session.pause()
+            phase = .idle
+            statusText = unsupportedMessage
+        }
+    }
+
+    /// Whether the current mode can run on this device (Selfie needs TrueDepth,
+    /// Operator needs rear world tracking). Demo mode covers the rest.
+    var captureSupported: Bool { mode.isSupported }
+    /// False only for rear capture on a device without LiDAR: the session will
+    /// be photo-only (display mesh, no measurement geometry).
+    var capturesDepth: Bool {
+        mode == .selfieFront || ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
+    }
+
+    private var unsupportedMessage: String {
+        mode == .selfieFront
+            ? "No TrueDepth camera — tap “Run demo” instead"
+            : "This device can't run rear-camera AR — tap “Run demo” instead"
+    }
 
     /// Adapt operator-voiced copy ("their …") to the subject when in Selfie mode.
     private func phrasing(_ text: String) -> String {
-        isSelfie ? text.replacingOccurrences(of: "their", with: "your",
-                                             options: .caseInsensitive) : text
-    }
-
-    /// True on devices without a TrueDepth front camera (e.g. the Simulator),
-    /// where only the no-camera demo flow can run.
-    static var hasTrueDepth: Bool { ARFaceTrackingConfiguration.isSupported }
-
-    /// Object Capture's reconstructed mesh density is capped by INPUT image
-    /// resolution, not by the `--detail` tier (measured: `.full` and `.raw` both
-    /// plateau at ~24-26k verts on our 1.56 MP frames). The default face-tracking
-    /// video format streams only 1440×1080, which is what holds OC's display face
-    /// soft. Pick the highest-resolution supported STREAMING format so the orbit
-    /// harvest feeds OC sharper frames; per-frame intrinsics travel from ARKit, so
-    /// nothing else changes. (A further gain — full-res stills via iOS 16
-    /// `captureHighResolutionFrame()` — is left for on-device validation, since it
-    /// needs an async still path keyed to each still's own camera pose.)
-    static func bestFaceVideoFormat() -> ARConfiguration.VideoFormat? {
-        ARFaceTrackingConfiguration.supportedVideoFormats.max {
-            let a = $0.imageResolution, b = $1.imageResolution
-            return a.width * a.height < b.width * b.height
-        }
+        mode == .selfieFront
+            ? text.replacingOccurrences(of: "their", with: "your",
+                                        options: .caseInsensitive)
+            : text
     }
 
     struct GuidanceState {
@@ -173,12 +202,21 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
                                 cx: Float, cy: Float,
                                 worldToCamera: simd_double4x4)?
     /// RGB photo + intrinsics grabbed once per burst, for texturing the mesh.
+    /// `worldToCamera` is only consumed by the photo-only station path (a depth
+    /// pose reuses its own extrinsic for the color entry).
     private struct BurstColor {
         let jpeg: Data
         let w: Int, h: Int
         let fx: Float, fy: Float, cx: Float, cy: Float
+        let worldToCamera: simd_double4x4
     }
     private var burstColor: BurstColor?
+    /// Frames seen during a photo-only station capture (no depth to count, so
+    /// the burst length is tracked explicitly).
+    private var burstRGBCount = 0
+    /// Photo-only capture: one guided "station" photo per pose (named
+    /// `key_<pose>`), uploaded as color frames since there are no depth poses.
+    private var stationFrames: [ColorFrameCapture] = []
     /// Motion metric of the frame `burstColor` was grabbed from — we keep the
     /// stillest (sharpest) RGB frame of the burst, not just the first.
     private var burstColorMotion: Double = .greatestFiniteMagnitude
@@ -197,15 +235,6 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     private var lastMotionTime: TimeInterval?
     private var motionMetric: Double?   // EMA of mm/s + 2·deg/s; nil until known
 
-    /// The most recent face-anchor transform seen while the face WAS tracked.
-    /// Once the phone orbits past the face-tracking limit (~±40°) the anchor
-    /// drops, so we keep computing the camera's pose in the face frame against
-    /// this locked transform (the head is held still, so it stays valid). nil
-    /// until a face has been seen at least once this session.
-    private var lockedFaceTransform: simd_float4x4?
-    /// Last projected eye points while the face was tracked, reused to keep the
-    /// on-screen guide line drawn through the profile poses (no live anchor).
-    private var lastEyes: (CGPoint, CGPoint)?
     private var viewportSize = CGSize(width: 390, height: 600)
     private var demoTimer: Timer?
     private var demoStart: Date?
@@ -281,7 +310,6 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     // ~1.5-2 MP stream). One per newly-filled coverage cell, rate-limited; each
     // still carries its OWN ARFrame's pose + intrinsics so it drops into the
     // existing color_frames schema as `still_###`.
-    private var stillCaptureSupported = false
     private var stillFrames: [ColorFrameCapture] = []
     private var lastStillAt: Date?
     private let maxStillFrames = 30
@@ -293,38 +321,23 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// or auto-shutter. The operator frames the subject, then taps Start (which
     /// asks for a patient ID and calls `beginGuidedCapture`).
     func startPreview() {
-        guard ARFaceTrackingConfiguration.isSupported else {
-            statusText = "No TrueDepth camera — tap “Run demo” instead"
+        guard let newBackend = mode.makeBackend() else {
+            backend = nil
+            statusText = unsupportedMessage
             return
         }
+        backend = newBackend
         stopDemo()
         isDemo = false
         captured = []
+        stationFrames = []
         burst = []
         alignedSince = nil
         lastAlignedAt = nil
         resetMotion()
         finishedSession = nil
         guidance = GuidanceState()
-        let config = ARFaceTrackingConfiguration()
-        config.isLightEstimationEnabled = true
-        // Prefer the format that supports captureHighResolutionFrame (iOS 16+):
-        // full-res stills are the single biggest Object Capture sharpness lever.
-        var format = Self.bestFaceVideoFormat()
-        stillCaptureSupported = false
-        if #available(iOS 16.0, *),
-           let rec = ARFaceTrackingConfiguration
-               .recommendedVideoFormatForHighResolutionFrameCapturing {
-            format = rec
-            stillCaptureSupported = true
-        }
-        if let fmt = format {
-            config.videoFormat = fmt
-            let r = fmt.imageResolution
-            print("[capture] video format \(Int(r.width))×\(Int(r.height)) "
-                  + "(\(String(format: "%.1f", r.width * r.height / 1e6)) MP)"
-                  + (stillCaptureSupported ? " + high-res stills" : ""))
-        }
+        let config = newBackend.makeConfiguration()
         session.delegate = self
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
         phase = .preview
@@ -335,11 +348,12 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// operator taps Start and enters a patient ID. Reuses the already-running
     /// preview session.
     func beginGuidedCapture(patientId: String) {
-        guard ARFaceTrackingConfiguration.isSupported else { return }
+        guard captureSupported else { return }
         self.patientId = patientId
         stopDemo()
         isDemo = false
         captured = []
+        stationFrames = []
         burst = []
         alignedSince = nil
         lastAlignedAt = nil
@@ -359,7 +373,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         resetMotion()
         // Drop back to a live preview (camera stays on) rather than a dead idle
         // screen, so the operator can immediately reframe and start again.
-        if Self.hasTrueDepth {
+        if captureSupported {
             startPreview()
         } else {
             session.pause()
@@ -371,7 +385,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// Called when the Capture tab appears: turn the camera on in preview mode.
     /// Guides/auto-shutter only begin once the operator taps Start.
     func autoStart() {
-        guard Self.hasTrueDepth, phase == .idle, !isDemo else { return }
+        guard captureSupported, phase == .idle, !isDemo else { return }
         startPreview()
     }
 
@@ -498,57 +512,26 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - ARSessionDelegate
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        // Keep the locked face frame fresh whenever the face IS tracked. Once
-        // the phone orbits past the tracking limit the anchor disappears, so we
-        // fall back to the last locked transform (the head is held still, so it
-        // remains an accurate face frame) and keep driving the capture from
-        // ARKit's world-tracked camera pose — which never depends on the face.
-        let trackedFace = frame.anchors
-            .compactMap { $0 as? ARFaceAnchor }
-            .first { $0.isTracked }
-        if let f = trackedFace { lockedFaceTransform = f.transform }
-        guard let faceTransform = trackedFace?.transform ?? lockedFaceTransform else {
+        // The backend does the camera-specific work (face anchor or Vision head
+        // anchor, depth, extrinsics); everything below is shared gating and
+        // state-machine logic.
+        guard let backend else { return }
+        guard let sample = backend.subjectSample(for: frame,
+                                                 viewportSize: viewportSize) else {
             DispatchQueue.main.async { self.guidance.hasFace = false }
             return
         }
-        let faceTracked = trackedFace != nil
+        let yaw = sample.yawDeg
+        let pitch = sample.pitchDeg
+        let roll = sample.rollDeg
+        let distMM = sample.distanceMM
+        let neutral = sample.expressionNeutral
+        let eyes = (sample.eyeLeft, sample.eyeRight)
 
-        let camToFaceCV = Self.cameraInFaceFrameCV(
-            faceTransform: faceTransform, cameraTransform: frame.camera.transform)
-        let camPos = camToFaceCV.columns.3
-        // Camera position in the face frame determines which "view" this is.
-        let yaw = atan2(Float(camPos.x), Float(camPos.z)) * 180 / .pi
-        let dist = simd_length(SIMD3<Double>(camPos.x, camPos.y, camPos.z))
-        // Pitch is the camera's ELEVATION above the head's horizontal plane —
-        // measured against the full horizontal distance, NOT just the forward
-        // (z) component. atan2(y, z) is degenerate near a profile (z -> 0 as yaw
-        // -> 90°, so a tiny vertical offset reads as a huge pitch and "Level"
-        // can never go green); atan2(y, hypot(x, z)) is stable at every yaw.
-        let horiz = (camPos.x * camPos.x + camPos.z * camPos.z).squareRoot()
-        let pitch = atan2(Float(camPos.y), Float(horiz)) * 180 / .pi
-
-        // Expression + eye line need a live anchor; on the locked frame we can't
-        // measure them, so we assume the held-still neutral face and reuse the
-        // last eye line for the guide overlay. Expression detection is ALSO
-        // unreliable once the camera swings past ~45° yaw: ARKit may still report
-        // a (poorly-fit) anchor that misreads a profile as a non-neutral
-        // expression, falsely blocking capture with "Relax your face". So trust
-        // the expression gate only while the camera is near the front of the face.
-        let neutral = abs(yaw) < 45
-            ? (trackedFace.map(Self.isExpressionNeutral) ?? true)
-            : true
-        let eyes: (CGPoint, CGPoint)
-        if let face = trackedFace {
-            eyes = projectedEyes(faceAnchor: face, frame: frame)
-            lastEyes = eyes
-        } else {
-            eyes = lastEyes ?? (.zero, .zero)
-        }
-
-        // Smoothed motion of the camera relative to the face: linear speed
+        // Smoothed motion of the camera relative to the subject: linear speed
         // (mm/s) plus angular speed (deg/s, weighted) of the head pose. Used to
         // gate the hold so we only ever capture a steady frame.
-        let camPosMM = SIMD3<Double>(camPos.x, camPos.y, camPos.z) * 1000
+        let camPosMM = sample.cameraPositionMM
         if let p0 = lastCamPosMM, let y0 = lastYawDeg, let pi0 = lastPitchDeg,
            let t0 = lastMotionTime, frame.timestamp > t0 {
             let dt = frame.timestamp - t0
@@ -562,18 +545,6 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         lastPitchDeg = pitch
         lastMotionTime = frame.timestamp
         let still = (motionMetric ?? .greatestFiniteMagnitude) < stillThreshold
-
-        // Roll is the tilt of the on-screen line between the eyes, so the gate
-        // matches exactly the line the user sees and levels against. Folded
-        // into [-90, 90] so the eye point order (camera mirroring) can't flip
-        // a level line to ~180°. Only meaningful with a live anchor; on the
-        // locked frame (profile poses) there is no eye line, so skip the gate.
-        var roll: Float = 0
-        if faceTracked {
-            roll = atan2(Float(eyes.1.y - eyes.0.y),
-                         Float(eyes.1.x - eyes.0.x)) * 180 / .pi
-            if roll > 90 { roll -= 180 } else if roll < -90 { roll += 180 }
-        }
 
         // Alignment + hold are evaluated while either ALIGNING or HOLDING the
         // pose. (Previously this only matched `.aligning`, so the first aligned
@@ -591,30 +562,29 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         case .orbiting:
             // Free orbit: no single target pose. Show the live readouts and try
             // to harvest a colour frame for whatever yaw×pitch cell we're in.
-            let distMM = Float(dist) * 1000
             updateGuidance(yaw: yaw, pitch: pitch, roll: roll, dist: distMM,
                            eyes: eyes, angleOK: true, aligned: still,
                            neutral: neutral)
-            harvestOrbitFrame(frame: frame, faceTransform: faceTransform,
+            harvestOrbitFrame(frame: frame, sample: sample,
                               yaw: yaw, pitch: pitch, still: still,
                               neutral: neutral, distMM: distMM)
             return
         default:   // .capturing, .done
             updateGuidance(yaw: yaw, pitch: pitch, roll: roll,
-                           dist: Float(dist) * 1000, eyes: eyes,
+                           dist: distMM, eyes: eyes,
                            angleOK: true, aligned: false, neutral: neutral)
-            collectBurstFrame(frame: frame, faceTransform: faceTransform)
+            collectBurstFrame(frame: frame, sample: sample)
             return
         }
 
-        let distMM = Float(dist) * 1000
         // A profile is shot one-handed at arm's length, which is harder to hold
         // perfectly level than a close-up front view — and the elevation is read
         // off the LOCKED face frame, which carries a little extra slack. Give the
         // profile poses a looser "Level" gate so it's actually reachable; the
         // small residual pitch is well within what the server fuse tolerates.
         let pitchTol = pose.needsLockedFrame ? pitchTolDeg + 5 : pitchTolDeg
-        let angleOK = abs(yaw - pose.targetYawDeg) < yawTolDeg
+        let yawTol = yawTolDeg + pose.yawTolBonusDeg + huntRelaxDeg(for: pose)
+        let angleOK = abs(yaw - pose.targetYawDeg) < yawTol
         let aligned = angleOK
             && abs(pitch - pose.targetPitchDeg) < pitchTol
             && abs(roll) < rollTolDeg
@@ -655,7 +625,8 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
                     if case .holding = self.phase { self.phase = .aligning(pose: pose) }
                     self.statusText = self.phrasing(self.alignmentHint(
                         pose: pose, yaw: yaw, pitch: pitch, roll: roll,
-                        distMM: distMM, neutral: neutral, still: still))
+                        distMM: distMM, neutral: neutral, still: still,
+                        subjectDriftMM: sample.subjectDriftMM))
                 }
             }
         }
@@ -674,6 +645,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         burst = []
         burstGeometry = nil
         burstColor = nil
+        burstRGBCount = 0
         burstColorMotion = .greatestFiniteMagnitude
         captureStart = Date()
         DispatchQueue.main.async {
@@ -682,16 +654,23 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    private func collectBurstFrame(frame: ARFrame, faceTransform: simd_float4x4) {
-        guard case let .capturing(pose) = phaseForProcessing() else { return }
+    private func collectBurstFrame(frame: ARFrame, sample: SubjectSample) {
+        guard case let .capturing(pose) = phaseForProcessing(),
+              let backend else { return }
+
+        // Photo-only rear capture (no LiDAR): the "burst" is just picking the
+        // stillest RGB frame at this station — there is no depth to accumulate.
+        let photoOnly = !backend.providesDepth
 
         // Don't wait forever for a full burst. At steep profile angles the
-        // TrueDepth stream can thin out (or, if the OS withholds depth without a
+        // depth stream can thin out (or, if the OS withholds depth without a
         // tracked face, stop entirely) — finish with the frames we have if
         // there are enough, otherwise drop back to aligning with a hint rather
         // than freezing the whole capture on this pose.
         if let start = captureStart, Date().timeIntervalSince(start) > captureTimeout {
-            if burst.count >= minBurstFrames, burstGeometry != nil {
+            if photoOnly, burstColor != nil {
+                finishStationPhoto(pose: pose)
+            } else if burst.count >= minBurstFrames, burstGeometry != nil {
                 finishBurst(pose: pose)
             } else {
                 abortBurst(pose: pose)
@@ -699,45 +678,16 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
 
-        guard let depthData = frame.capturedDepthData else { return }
-
-        let converted = depthData.converting(
-            toDepthDataType: kCVPixelFormatType_DepthFloat32)
-        let buffer = converted.depthDataMap
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        let w = CVPixelBufferGetWidth(buffer)
-        let h = CVPixelBufferGetHeight(buffer)
-        let stride = CVPixelBufferGetBytesPerRow(buffer) / MemoryLayout<Float32>.size
-        guard let base = CVPixelBufferGetBaseAddress(buffer)?
-            .assumingMemoryBound(to: Float32.self) else { return }
-
-        var depthMM = [Float](repeating: 0, count: w * h)
-        for y in 0..<h {
-            for x in 0..<w {
-                let v = base[y * stride + x]
-                depthMM[y * w + x] = v.isFinite && v > 0 ? v * 1000 : 0
+        if photoOnly {
+            burstRGBCount += 1
+        } else {
+            guard let depth = backend.depthSample(for: frame) else { return }
+            burst.append(depth.depthMM)
+            if burstGeometry == nil {
+                burstGeometry = (depth.width, depth.height,
+                                 depth.fx, depth.fy, depth.cx, depth.cy,
+                                 sample.worldToCameraCV)
             }
-        }
-        burst.append(depthMM)
-
-        if burstGeometry == nil {
-            // Intrinsics for the depth map come from its calibration data,
-            // scaled from the reference (full sensor) resolution.
-            var fx = Float(w), fy = Float(w), cx = Float(w) / 2, cy = Float(h) / 2
-            if let calib = converted.cameraCalibrationData {
-                let k = calib.intrinsicMatrix
-                let refW = Float(calib.intrinsicMatrixReferenceDimensions.width)
-                let scale = Float(w) / refW
-                fx = k.columns.0.x * scale
-                fy = k.columns.1.y * scale
-                cx = k.columns.2.x * scale
-                cy = k.columns.2.y * scale
-            }
-            let camToFaceCV = Self.cameraInFaceFrameCV(
-                faceTransform: faceTransform,
-                cameraTransform: frame.camera.transform)
-            burstGeometry = (w, h, fx, fy, cx, cy, camToFaceCV.inverse.scaledTranslationMM())
         }
 
         // Keep the RGB frame from the STILLEST moment of the burst (lowest
@@ -749,11 +699,16 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
             burstColor = BurstColor(
                 jpeg: jpeg, w: Int(res.width), h: Int(res.height),
                 fx: k.columns.0.x, fy: k.columns.1.y,
-                cx: k.columns.2.x, cy: k.columns.2.y)
+                cx: k.columns.2.x, cy: k.columns.2.y,
+                worldToCamera: sample.worldToCameraCV)
             burstColorMotion = motion
         }
 
-        if burst.count >= burstFrames {
+        if photoOnly {
+            if burstRGBCount >= burstFrames, burstColor != nil {
+                finishStationPhoto(pose: pose)
+            }
+        } else if burst.count >= burstFrames {
             finishBurst(pose: pose)
         }
     }
@@ -786,17 +741,44 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         burst = []
         burstGeometry = nil
         burstColor = nil
+        burstRGBCount = 0
         captureStart = nil
-        cues.captured()
+        advanceFromCapturedPose(pose)
+    }
 
+    /// Photo-only station capture: save the stillest RGB frame of the hold as
+    /// a `key_<pose>` color frame (there is no depth pose to write), request a
+    /// high-res still from the same vantage, then advance.
+    private func finishStationPhoto(pose: Pose) {
+        guard let color = burstColor else { return }
+        stationFrames.append(ColorFrameCapture(
+            name: "key_\(pose.name)", jpeg: color.jpeg,
+            width: color.w, height: color.h,
+            fx: color.fx, fy: color.fy, cx: color.cx, cy: color.cy,
+            worldToCamera: color.worldToCamera))
+        burst = []
+        burstGeometry = nil
+        burstColor = nil
+        burstRGBCount = 0
+        burstColorMotion = .greatestFiniteMagnitude
+        captureStart = nil
+        captureStill()
+        advanceFromCapturedPose(pose)
+    }
+
+    /// Shared tail of a completed keyframe (depth burst or station photo):
+    /// freeze the rear head anchor after the front pose, then advance to the
+    /// next pose, or into the free-orbit phase after the last one. The orbit
+    /// is where dense colour frames are auto-harvested; the operator ends it
+    /// (or it ends itself) and only THEN do we save.
+    private func advanceFromCapturedPose(_ pose: Pose) {
+        if pose == .front { backend?.didCaptureFrontPose() }
+        cues.captured()
         DispatchQueue.main.async {
             if let next = Pose(rawValue: pose.rawValue + 1) {
                 self.phase = .aligning(pose: next)
                 self.statusText = self.phrasing(next.instruction)
             } else {
-                // Last depth keyframe done — move on to the free-orbit phase
-                // where dense colour frames are auto-harvested. The operator
-                // ends it (or it ends itself) and only THEN do we save.
                 self.beginOrbit()
             }
         }
@@ -824,44 +806,15 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         lastAlignedAt = nil
         phase = .orbiting
         cues.stop()   // end the hold/hunt cues; orbit uses per-frame ticks
-        setCameraLocked(true)
+        backend?.setCameraLocked(true)
         statusText = phrasing(
             "Last step: slowly sweep the phone around their face — it captures as you move")
-    }
-
-    /// Lock (or restore) AE/AWB/focus on the front camera while ARKit runs.
-    private func setCameraLocked(_ locked: Bool) {
-        guard #available(iOS 16.0, *),
-              let device = ARFaceTrackingConfiguration
-                  .configurableCaptureDeviceForPrimaryCamera else { return }
-        do {
-            try device.lockForConfiguration()
-            if locked {
-                if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
-                if device.isWhiteBalanceModeSupported(.locked) { device.whiteBalanceMode = .locked }
-                if device.isFocusModeSupported(.locked) { device.focusMode = .locked }
-            } else {
-                if device.isExposureModeSupported(.continuousAutoExposure) {
-                    device.exposureMode = .continuousAutoExposure
-                }
-                if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
-                    device.whiteBalanceMode = .continuousAutoWhiteBalance
-                }
-                if device.isFocusModeSupported(.continuousAutoFocus) {
-                    device.focusMode = .continuousAutoFocus
-                }
-            }
-            device.unlockForConfiguration()
-            print("[capture] camera \(locked ? "locked" : "auto") for orbit")
-        } catch {
-            print("[capture] camera lock failed: \(error)")
-        }
     }
 
     /// Called from the UI when the operator taps Done during the orbit phase.
     func finishOrbit() {
         guard phase == .orbiting else { return }
-        setCameraLocked(false)
+        backend?.setCameraLocked(false)
         session.pause()
         phase = .done
         statusText = "Saving session…"
@@ -875,7 +828,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// continuously as the phone sweeps, while the spacing test rejects
     /// near-duplicates when you pause or re-cross covered ground. Bounded by
     /// `maxOrbitFrames` for upload/storage.
-    private func harvestOrbitFrame(frame: ARFrame, faceTransform: simd_float4x4,
+    private func harvestOrbitFrame(frame: ARFrame, sample: SubjectSample,
                                    yaw: Float, pitch: Float, still: Bool,
                                    neutral: Bool, distMM: Float) {
         guard orbitColorFrames.count < maxOrbitFrames else { return }
@@ -895,15 +848,13 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
 
         let res = frame.camera.imageResolution
         let k = frame.camera.intrinsics
-        let camToFaceCV = Self.cameraInFaceFrameCV(
-            faceTransform: faceTransform, cameraTransform: frame.camera.transform)
         let idx = orbitColorFrames.count
         let frameCapture = ColorFrameCapture(
             name: String(format: "orbit_%03d", idx), jpeg: jpeg,
             width: Int(res.width), height: Int(res.height),
             fx: k.columns.0.x, fy: k.columns.1.y,
             cx: k.columns.2.x, cy: k.columns.2.y,
-            worldToCamera: camToFaceCV.inverse.scaledTranslationMM())
+            worldToCamera: sample.worldToCameraCV)
 
         orbitYaws.append(yaw)
         orbitPitches.append(pitch)
@@ -912,7 +863,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         // a NEWLY filled cell also triggers a full-res still from that vantage.
         if let (yi, pi) = orbitBucket(yaw: yaw, pitch: pitch),
            coverage.insert(Self.orbitCellKey(yi, pi)).inserted {
-            captureStill(faceTransform: faceTransform)
+            captureStill()
         }
         let count = orbitColorFrames.count
         let cells = coverage
@@ -930,9 +881,10 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// Grab a ~12 MP still (vs the ~2 MP stream) from the current vantage. The
     /// completion's ARFrame carries the still's OWN camera pose + intrinsics, so
     /// its extrinsics are exact even though it lands ~100 ms after the trigger
-    /// (the face transform is world-anchored and the head is held still).
-    private func captureStill(faceTransform: simd_float4x4) {
-        guard #available(iOS 16.0, *), stillCaptureSupported else { return }
+    /// (the subject anchor is world-locked and the head is held still).
+    private func captureStill() {
+        guard #available(iOS 16.0, *),
+              let backend, backend.stillCaptureSupported else { return }
         guard stillFrames.count < maxStillFrames else { return }
         if let last = lastStillAt, Date().timeIntervalSince(last) < minStillInterval {
             return
@@ -944,17 +896,17 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
                 return
             }
             guard let jpeg = Self.jpegData(from: frame.capturedImage, quality: 0.9),
-                  self.stillFrames.count < self.maxStillFrames else { return }
+                  self.stillFrames.count < self.maxStillFrames,
+                  let worldToCamera = self.backend?.worldToCameraCV(for: frame)
+            else { return }
             let res = frame.camera.imageResolution
             let k = frame.camera.intrinsics
-            let camToFaceCV = Self.cameraInFaceFrameCV(
-                faceTransform: faceTransform, cameraTransform: frame.camera.transform)
             let cf = ColorFrameCapture(
                 name: String(format: "still_%03d", self.stillFrames.count), jpeg: jpeg,
                 width: Int(res.width), height: Int(res.height),
                 fx: k.columns.0.x, fy: k.columns.1.y,
                 cx: k.columns.2.x, cy: k.columns.2.y,
-                worldToCamera: camToFaceCV.inverse.scaledTranslationMM())
+                worldToCamera: worldToCamera)
             self.stillFrames.append(cf)
             print("[capture] still \(self.stillFrames.count) "
                   + "@ \(Int(res.width))×\(Int(res.height))")
@@ -1026,6 +978,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         burst = []
         burstGeometry = nil
         burstColor = nil
+        burstRGBCount = 0
         burstColorMotion = .greatestFiniteMagnitude
         captureStart = nil
         alignedSince = nil
@@ -1038,9 +991,12 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
 
     private func saveSession() {
         do {
-            let url = try SessionWriter.write(poses: captured,
-                                              colorFrames: orbitColorFrames + stillFrames,
-                                              patientId: patientId)
+            let url = try SessionWriter.write(
+                poses: captured,
+                colorFrames: stationFrames + orbitColorFrames + stillFrames,
+                patientId: patientId,
+                device: backend?.deviceTag ?? "iphone-truedepth",
+                photoOnly: backend.map { !$0.providesDepth } ?? false)
             finishedSession = url
             statusText = "Captured ✓ — ready to upload from Sessions tab"
             cues.done()
@@ -1059,54 +1015,6 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
             options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: quality])
     }
 
-    // MARK: - geometry helpers
-
-    /// Camera pose expressed in the face anchor frame, converted from ARKit's
-    /// OpenGL-style camera axes (y up, z backward) to OpenCV (y down,
-    /// z forward) so the saved extrinsics match the processing pipeline.
-    static func cameraInFaceFrameCV(faceTransform: simd_float4x4,
-                                    cameraTransform: simd_float4x4) -> simd_double4x4 {
-        var glToCV = matrix_identity_float4x4
-        glToCV.columns.1.y = -1
-        glToCV.columns.2.z = -1
-        let camInFace = faceTransform.inverse * cameraTransform * glToCV
-        return simd_double4x4(camInFace)
-    }
-
-    static func isExpressionNeutral(_ anchor: ARFaceAnchor) -> Bool {
-        let keys: [ARFaceAnchor.BlendShapeLocation] = [
-            .jawOpen, .mouthSmileLeft, .mouthSmileRight, .mouthPucker,
-            .browInnerUp, .browDownLeft, .browDownRight, .cheekPuff]
-        for key in keys {
-            if let v = anchor.blendShapes[key]?.floatValue, v > 0.25 { return false }
-        }
-        return true
-    }
-
-    private func projectedEyes(faceAnchor: ARFaceAnchor,
-                               frame: ARFrame) -> (CGPoint, CGPoint) {
-        // The eye transforms are centered on the eyeball, not the pupil. Push
-        // each point forward by one eyeball radius along the gaze direction
-        // (toward `lookAtPoint`) so the marker lands on the cornea/pupil rather
-        // than the upper iris (the user looks slightly down at the screen).
-        let eyeballRadius: Float = 0.0125          // metres, centre -> cornea
-        let lookAt = faceAnchor.lookAtPoint        // face-space focus point
-
-        func project(_ eye: simd_float4x4) -> CGPoint {
-            let centerFace = simd_make_float3(eye.columns.3)
-            var gaze = lookAt - centerFace
-            let len = simd_length(gaze)
-            gaze = len > 1e-5 ? gaze / len : SIMD3<Float>(0, 0, 1)
-            let pupilFace = centerFace + gaze * eyeballRadius
-            let world = faceAnchor.transform * SIMD4<Float>(pupilFace, 1)
-            return frame.camera.projectPoint(
-                simd_make_float3(world), orientation: .portrait,
-                viewportSize: viewportSize)
-        }
-        return (project(faceAnchor.leftEyeTransform),
-                project(faceAnchor.rightEyeTransform))
-    }
-
     private func updateGuidance(yaw: Float, pitch: Float, roll: Float,
                                 dist: Float, eyes: (CGPoint, CGPoint),
                                 angleOK: Bool, aligned: Bool, neutral: Bool) {
@@ -1120,7 +1028,11 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
 
     private func alignmentHint(pose: Pose, yaw: Float, pitch: Float,
                                roll: Float, distMM: Float, neutral: Bool,
-                               still: Bool) -> String {
+                               still: Bool, subjectDriftMM: Float = 0) -> String {
+        // Rear capture: the head anchor was frozen at the front pose, so a
+        // subject who shifts afterwards silently corrupts every extrinsic.
+        // The backend measures the drift whenever Vision re-sees the face.
+        if subjectDriftMM > 20 { return "The subject moved — ask them to hold still" }
         if !neutral { return "Relax your face (neutral expression)" }
         if distMM < minDistMM { return "Move the phone a little farther away" }
         if distMM > maxDistMM { return "Move the phone a little closer" }
@@ -1146,6 +1058,21 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         return pose.instruction
     }
 
+    // Auto-relax: a pose that's been hunted for >10 s gently widens its yaw
+    // gate (up to +6°) instead of stonewalling. A long hunt drags out the whole
+    // session, and session length is itself a capture-quality risk — expression
+    // drift across the photo set is what melts Object Capture geometry.
+    private var huntPose: Pose?
+    private var huntStart: Date?
+    private func huntRelaxDeg(for pose: Pose) -> Float {
+        if huntPose != pose {
+            huntPose = pose
+            huntStart = Date()
+        }
+        let hunting = Date().timeIntervalSince(huntStart ?? Date())
+        return Float(min(max(hunting - 10, 0), 12) / 2)
+    }
+
     /// Clears the smoothed-motion state between captures so a stale velocity
     /// from a previous pose/session can't briefly pass the stillness gate.
     private func resetMotion() {
@@ -1154,8 +1081,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         lastPitchDeg = nil
         lastMotionTime = nil
         motionMetric = nil
-        lockedFaceTransform = nil
-        lastEyes = nil
+        backend?.reset()
         captureStart = nil
         coverage = []
         orbitColorFrames = []

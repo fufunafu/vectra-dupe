@@ -80,6 +80,16 @@ HEAD_HEIGHT_MIN_MM, HEAD_HEIGHT_MAX_MM = 140.0, 340.0
 # VECTRA_OC_ATTEMPTS. Each attempt re-runs ocrecon (~20 s at full detail).
 OC_ATTEMPTS = max(1, int(os.environ.get("VECTRA_OC_ATTEMPTS", "5")))
 
+# Photo-only sessions (rear camera, no LiDAR): metric alignment fits OC's
+# estimated camera CENTRES to the ARKit world-tracked centres of the same
+# photos (no depth to unproject landmarks through). Camera centres are noisier
+# anchors than landmarks — ARKit drift + OC pose estimation both contribute —
+# so the rms gate is looser; the head-height guard backstops the scale. These
+# sessions are display-only, never measured.
+PHOTO_OC_ATTEMPTS = max(1, int(os.environ.get("VECTRA_OC_PHOTO_ATTEMPTS", "3")))
+MIN_POSE_CORRESPONDENCES = 8
+MAX_POSE_ALIGN_RMS_MM = 30.0
+
 
 @dataclass
 class OCResult:
@@ -209,7 +219,8 @@ def _detect_landmarks(image_path: str) -> dict | None:
     return d if d.get("ok") else None
 
 
-def _ref_landmarks_world(raw_dir: str, poses: list[PoseCapture]):
+def _ref_landmarks_world(raw_dir: str, poses: list[PoseCapture],
+                         extrinsics: "list[np.ndarray] | None" = None):
     """Metric 3D positions of the 478 face landmarks in the ARKit world frame.
 
     The front view's depth is the most accurate (live anchor, head-on), so each
@@ -217,6 +228,12 @@ def _ref_landmarks_world(raw_dir: str, poses: list[PoseCapture]):
     half views only fill in landmarks the front depth can't reach. Averaging
     across views was tried and hurt — the oblique half-view depth pulls central
     landmarks off and inflates the alignment residual. Returns (L (478,3), valid)."""
+    # Use the ICP/landmark-refined extrinsics when the caller has them: with
+    # raw ARKit poses, per-view drift makes the reference landmark cloud
+    # internally inconsistent, which puts a floor under the alignment rms that
+    # no Object Capture attempt can beat (observed ~14 mm on a drifty capture).
+    ext_by_name = ({p.name: e for p, e in zip(poses, extrinsics)}
+                   if extrinsics is not None else {})
     by_name = {p.name: p for p in poses}
     L = np.zeros((478, 3))
     valid = np.zeros(478, dtype=bool)
@@ -228,16 +245,20 @@ def _ref_landmarks_world(raw_dir: str, poses: list[PoseCapture]):
         lmk = _detect_landmarks(img_path)
         if lmk is None or len(lmk.get("landmarks", [])) != 478:
             continue
-        pw, ok = _unproject_landmarks(pose, np.asarray(lmk["landmarks"]))
+        pw, ok = _unproject_landmarks(pose, np.asarray(lmk["landmarks"]),
+                                      world_to_camera=ext_by_name.get(view))
         take = ok & ~valid
         L[take] = pw[take]
         valid |= take
     return L, valid
 
 
-def _unproject_landmarks(pose: PoseCapture, pts2d: np.ndarray):
+def _unproject_landmarks(pose: PoseCapture, pts2d: np.ndarray,
+                         world_to_camera: np.ndarray | None = None):
     """Back-project colour-image landmark pixels through this pose's depth into
-    world coords. Returns (world (n,3), valid)."""
+    world coords. Returns (world (n,3), valid). `world_to_camera` overrides the
+    pose's raw extrinsic (pass the ICP-refined one when available)."""
+    ext = pose.world_to_camera if world_to_camera is None else world_to_camera
     r, di = pose.rgb_intrinsics, pose.intrinsics
     dd = pose.depth
     dh, dw = dd.shape
@@ -254,7 +275,7 @@ def _unproject_landmarks(pose: PoseCapture, pts2d: np.ndarray):
     Xc = (ud - di.cx) / di.fx * Z
     Yc = (vd - di.cy) / di.fy * Z
     cam = np.stack([Xc, Yc, Z, np.ones_like(Z)], axis=1)
-    world = (np.linalg.inv(pose.world_to_camera) @ cam.T).T[:, :3]
+    world = (np.linalg.inv(ext) @ cam.T).T[:, :3]
     return world, valid
 
 
@@ -393,13 +414,18 @@ def _stage_images(raw_dir: str, work_dir: str) -> int:
     return n
 
 
-def _run_ocrecon(image_dir: str, out_obj: str, timeout_s: int = 900) -> dict:
-    """Run the CLI; returns its final-line JSON ({output,images_used,seconds})."""
+def _run_ocrecon(image_dir: str, out_obj: str, timeout_s: int = 900,
+                 poses_path: str | None = None) -> dict:
+    """Run the CLI; returns its final-line JSON ({output,images_used,seconds}).
+    `poses_path` additionally requests OC's per-image camera poses as JSON —
+    the metric anchor for photo-only sessions."""
+    cmd = [OCRECON_BIN, image_dir, out_obj, "--detail", OC_DETAIL,
+           "--feature-sensitivity", "high"]
+    if poses_path:
+        cmd += ["--poses", poses_path]
     try:
         proc = subprocess.run(
-            [OCRECON_BIN, image_dir, out_obj, "--detail", OC_DETAIL,
-             "--feature-sensitivity", "high"],
-            capture_output=True, text=True, timeout=timeout_s)
+            cmd, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"ocrecon hung (>{timeout_s}s), killed")
     if proc.returncode != 0 or not os.path.isfile(out_obj):
@@ -429,7 +455,8 @@ def _make_textured_tensor(V_world: np.ndarray, F: np.ndarray,
 
 def reconstruct_metric(raw_dir: str, poses: list[PoseCapture],
                        color_frames: list[ColorFrame], out_dir: str,
-                       attempts: int = OC_ATTEMPTS) -> OCResult:
+                       attempts: int = OC_ATTEMPTS,
+                       extrinsics: "list[np.ndarray] | None" = None) -> OCResult:
     """Reconstruct via Object Capture, best of `attempts` runs.
 
     Each attempt is a full fresh reconstruction+alignment (PhotogrammetrySession
@@ -443,7 +470,7 @@ def reconstruct_metric(raw_dir: str, poses: list[PoseCapture],
         diag: dict = {"attempt": i + 1}
         try:
             res = _reconstruct_metric_once(raw_dir, poses, color_frames, out_dir,
-                                           diag=diag)
+                                           diag=diag, extrinsics=extrinsics)
         except Exception as e:  # noqa: BLE001
             diag["error"] = str(e)
             attempt_log.append(diag)
@@ -468,7 +495,8 @@ def reconstruct_metric(raw_dir: str, poses: list[PoseCapture],
 
 def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
                              color_frames: list[ColorFrame], out_dir: str,
-                             diag: dict | None = None) -> OCResult:
+                             diag: dict | None = None,
+                             extrinsics: "list[np.ndarray] | None" = None) -> OCResult:
     """One Object Capture reconstruction + metric alignment. Raises on any failure
     or guard violation. `diag` (if given) is filled with every intermediate metric
     as it is computed, so a failed attempt still reports how far it got and by how
@@ -502,7 +530,7 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
         if oc is None:
             raise RuntimeError("no face detected in any OBJ render")
         ocL, ocOK, N4, _ = oc
-        refL, refOK = _ref_landmarks_world(raw_dir, poses)
+        refL, refOK = _ref_landmarks_world(raw_dir, poses, extrinsics=extrinsics)
         diag["oc_landmarks"] = int(ocOK.sum())
         diag["ref_landmarks"] = int(refOK.sum())
 
@@ -560,6 +588,148 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
             dbg = os.path.join(out_dir, "oc_debug")
             os.makedirs(dbg, exist_ok=True)
             for fn in ("oc_render.png", "model.obj", "model.mtl"):
+                p = os.path.join(work, fn)
+                if os.path.isfile(p):
+                    shutil.copy2(p, os.path.join(dbg, fn))
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _load_oc_camera_centers(poses_json: str) -> dict[str, np.ndarray]:
+    """ocrecon --poses output -> {image basename: camera centre (3,) in the
+    reconstruction's (OBJ) coordinate space}."""
+    with open(poses_json) as f:
+        data = json.load(f)
+    centers: dict[str, np.ndarray] = {}
+    for entry in data.get("poses", []):
+        name = os.path.basename(entry.get("image", ""))
+        cam_to_world = np.asarray(entry.get("camera_to_world", []), dtype=float)
+        if not name or cam_to_world.shape != (4, 4):
+            continue
+        centers[name] = cam_to_world[:3, 3]
+    return centers
+
+
+def reconstruct_photo_only(raw_dir: str, color_frames: list[ColorFrame],
+                           out_dir: str,
+                           attempts: int = PHOTO_OC_ATTEMPTS) -> OCResult:
+    """Display-only reconstruction for sessions with NO depth poses (rear
+    camera without LiDAR). Same best-of-N attempt loop as reconstruct_metric,
+    but metric alignment comes from OC-vs-ARKit camera poses instead of
+    depth-unprojected landmarks."""
+    best: OCResult | None = None
+    attempt_log: list[dict] = []
+    n_passed = 0
+    for i in range(max(1, attempts)):
+        diag: dict = {"attempt": i + 1}
+        try:
+            res = _reconstruct_photo_only_once(raw_dir, color_frames, out_dir,
+                                               diag=diag)
+        except Exception as e:  # noqa: BLE001
+            diag["error"] = str(e)
+            attempt_log.append(diag)
+            print(f"[photogrammetry] photo-only attempt {i + 1}/{attempts} "
+                  f"rejected: {e} (partial: {diag})")
+            continue
+        attempt_log.append(diag)
+        n_passed += 1
+        if best is None or res.stats["align_rms_mm"] < best.stats["align_rms_mm"]:
+            best = res
+        print(f"[photogrammetry] photo-only attempt {i + 1}/{attempts} ok: "
+              f"rms={res.stats['align_rms_mm']}mm")
+    if best is None:
+        detail = "; ".join(f"#{d['attempt']}: {d.get('error', '?')}"
+                           for d in attempt_log)
+        raise RuntimeError(
+            f"all {attempts} photo-only Object Capture attempts failed — {detail}")
+    best.stats["oc_attempts"] = attempts
+    best.stats["oc_attempts_passed"] = n_passed
+    best.stats["oc_attempt_log"] = attempt_log
+    return best
+
+
+def _reconstruct_photo_only_once(raw_dir: str, color_frames: list[ColorFrame],
+                                 out_dir: str,
+                                 diag: dict | None = None) -> OCResult:
+    """One OC reconstruction + camera-pose metric alignment for a photo-only
+    session. The ARKit `world_to_camera` of every colour frame is expressed in
+    the capture app's head frame (mm), so the similarity that maps OC camera
+    centres onto the ARKit ones drops the whole OBJ into that frame — which is
+    exactly what normalize_to_front_frame expects."""
+    diag = diag if diag is not None else {}
+    debug = os.environ.get("VECTRA_OC_DEBUG") == "1"
+    work = tempfile.mkdtemp(prefix="oc_", dir=out_dir)
+    try:
+        n_img = _stage_images(raw_dir, work)
+        diag["n_images"] = n_img
+        if n_img < 12:
+            raise RuntimeError(f"too few photos for photogrammetry ({n_img})")
+        out_obj = os.path.join(work, "model.obj")
+        poses_json = os.path.join(work, "poses.json")
+        run_info = _run_ocrecon(work, out_obj, poses_path=poses_json)
+        diag["oc_seconds"] = run_info.get("seconds")
+
+        V, F, tri_uv, albedo = _load_obj_with_texture(out_obj)
+        diag["obj_verts"] = len(V)
+        if len(V) == 0 or len(F) == 0:
+            raise RuntimeError("ocrecon produced an empty mesh")
+        if albedo is None or tri_uv is None:
+            raise RuntimeError("ocrecon mesh has no texture")
+        if not os.path.isfile(poses_json):
+            raise RuntimeError("ocrecon did not report camera poses")
+
+        # Match OC's estimated camera centres to the ARKit ones by filename.
+        oc_centers = _load_oc_camera_centers(poses_json)
+        arkit_centers: dict[str, np.ndarray] = {}
+        for cf in color_frames:
+            ext = np.asarray(cf.world_to_camera, dtype=float)
+            arkit_centers[f"color_{cf.name}.jpg"] = -ext[:3, :3].T @ ext[:3, 3]
+        common = sorted(set(oc_centers) & set(arkit_centers))
+        diag["n_pose_corr"] = len(common)
+        if len(common) < MIN_POSE_CORRESPONDENCES:
+            raise RuntimeError(
+                f"too few OC/ARKit camera correspondences ({len(common)})")
+
+        src = np.stack([oc_centers[k] for k in common])
+        dst = np.stack([arkit_centers[k] for k in common])
+        T_u, scale, rms, n_inl = _solve_similarity(src, dst)
+        diag["rms_mm"] = round(rms, 1)
+        if rms > MAX_POSE_ALIGN_RMS_MM:
+            raise RuntimeError(f"poor camera-pose alignment (rms={rms:.1f}mm)")
+
+        V_world = (T_u[:3, :3] @ V.T).T + T_u[:3, 3]
+
+        # Head-height plausibility around the head-frame origin — the only
+        # independent backstop on the recovered scale (no IPD without depth).
+        head = V_world[np.linalg.norm(V_world, axis=1) <= 135.0]
+        head_h = float(np.ptp(head[:, 1])) if len(head) else 0.0
+        diag["head_h_mm"] = round(head_h, 1)
+        if not (HEAD_HEIGHT_MIN_MM <= head_h <= HEAD_HEIGHT_MAX_MM):
+            raise RuntimeError(f"implausible head height {head_h:.0f}mm")
+
+        mesh = o3d.geometry.TriangleMesh(
+            o3d.utility.Vector3dVector(V_world), o3d.utility.Vector3iVector(F))
+        mesh.compute_vertex_normals()
+        mesh.vertex_colors = o3d.utility.Vector3dVector(
+            _sample_albedo(tri_uv, F, len(V_world), albedo))
+        textured = _make_textured_tensor(V_world, F, tri_uv, albedo)
+
+        metric_scale = float(np.linalg.norm(T_u[:3, 0]))   # mm per OBJ unit
+        stats = {
+            "reconstruction": "object_capture",
+            "oc_detail": OC_DETAIL,
+            "oc_images_used": run_info.get("images_used", n_img),
+            "oc_seconds": run_info.get("seconds"),
+            "metric_scale_mm_per_unit": round(metric_scale, 4),
+            "align_rms_mm": round(rms, 3),
+            "align_correspondences": n_inl,
+            "align_method": "camera_pose_umeyama",
+        }
+        return OCResult(mesh=mesh, textured=textured, stats=stats)
+    finally:
+        if debug:
+            dbg = os.path.join(out_dir, "oc_debug")
+            os.makedirs(dbg, exist_ok=True)
+            for fn in ("model.obj", "model.mtl", "poses.json"):
                 p = os.path.join(work, fn)
                 if os.path.isfile(p):
                     shutil.copy2(p, os.path.join(dbg, fn))

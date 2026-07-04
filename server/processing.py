@@ -40,6 +40,12 @@ DISPLAY_SMOOTH_ITERS = int(os.environ.get("VECTRA_DISPLAY_SMOOTH", "12"))
 # few iterations to take the edge off the periphery without melting detail.
 OC_DISPLAY_TAUBIN_ITERS = max(0, int(os.environ.get("VECTRA_OC_DISPLAY_TAUBIN", "3")))
 
+# Rear-LiDAR sessions (device "iphone-rear-lidar"): sceneDepth is 256x192 and
+# noisier than TrueDepth at capture range, so the TSDF needs a wider truncation
+# band or per-view noise reads as misalignment and shreds the surface. Starting
+# point pending tuning on real captures.
+LIDAR_SDF_TRUNC_MM = float(os.environ.get("VECTRA_LIDAR_SDF_TRUNC_MM", "10.0"))
+
 
 def crop_to_head(mesh: o3d.geometry.TriangleMesh,
                  center: np.ndarray, radius_mm: float) -> o3d.geometry.TriangleMesh:
@@ -152,13 +158,23 @@ def process_session(raw_dir: str, out_dir: str,
         if os.path.isdir(stale):
             shutil.rmtree(stale, ignore_errors=True)
 
+    # Photo-only session (rear camera without LiDAR): no depth poses at all, so
+    # there is nothing for TSDF/ICP to measure — display-only photogrammetry.
+    if not poses:
+        return _process_photo_only(raw_dir, out_dir, color_frames, meta,
+                                   texture_mode)
+
     # --- Measurement mesh: ALWAYS depth-fusion (TSDF) — the validated ±0.2 mL path.
     extrinsics = fuse.view_extrinsics(poses)
     # Colour frames are depth-less: they never enter ICP/TSDF (so the dense RGB
     # set can be large without slowing geometry). They carry raw ARKit poses;
     # texture projection is forgiving and gates by facing angle.
     col_ext_world = [cf.world_to_camera for cf in color_frames]
-    world_mesh = fuse.integrate(poses, extrinsics, color_frames, col_ext_world)
+    # Rear-LiDAR depth is coarser/noisier than TrueDepth: widen the TSDF band.
+    sdf_trunc = (LIDAR_SDF_TRUNC_MM
+                 if meta.get("device") == "iphone-rear-lidar" else None)
+    world_mesh = fuse.integrate(poses, extrinsics, color_frames, col_ext_world,
+                                sdf_trunc_mm=sdf_trunc)
     mesh, world_to_norm = normalize_to_front_frame(world_mesh, poses[0].world_to_camera)
     # mesh.ply: geometry + per-vertex colour — drives the volume measurement.
     o3d.io.write_triangle_mesh(os.path.join(out_dir, "mesh.ply"), mesh)
@@ -179,7 +195,8 @@ def process_session(raw_dir: str, out_dir: str,
               and not oc_avail["disabled"])
     if use_oc:
         try:
-            oc = photogrammetry.reconstruct_metric(raw_dir, poses, color_frames, out_dir)
+            oc = photogrammetry.reconstruct_metric(raw_dir, poses, color_frames,
+                                                   out_dir, extrinsics=extrinsics)
             oc_stats = oc.stats
             display_source = "object_capture"
         except Exception as e:  # noqa: BLE001
@@ -189,39 +206,7 @@ def process_session(raw_dir: str, out_dir: str,
 
     vertex_ok = textured_ok = False
     if oc is not None:
-        # OC geometry is already clean — no cosmetic smoothing needed. Normalize it
-        # into the same canonical face frame the measurement mesh uses (its own
-        # recentre, since OC and TSDF centroids differ by a few mm — irrelevant for
-        # a standalone display model).
-        # Tighter face-focused crop (+ keep_main_components inside
-        # normalize_to_front_frame) trims OC's gray hair/neck blob halo and ragged
-        # outline. The SAME crop radius + recenter (oc_w2n) is reused for the
-        # textured mesh below so the Smooth/Textured toggle stays aligned.
-        oc_disp, oc_w2n = normalize_to_front_frame(
-            oc.mesh, poses[0].world_to_camera, radius_mm=DISPLAY_CROP_RADIUS_MM)
-        if OC_DISPLAY_TAUBIN_ITERS:
-            # Taubin drops vertex colours; vertex count/order is preserved, so
-            # re-attach the pre-smoothing colours.
-            colors = oc_disp.vertex_colors
-            oc_disp = oc_disp.filter_smooth_taubin(
-                number_of_iterations=OC_DISPLAY_TAUBIN_ITERS)
-            oc_disp.vertex_colors = colors
-            oc_disp.compute_vertex_normals()
-        if texture_mode in ("vertex", "both"):
-            try:
-                tmesh = o3d.t.geometry.TriangleMesh.from_legacy(oc_disp)
-                o3d.t.io.write_triangle_mesh(os.path.join(out_dir, "mesh.glb"), tmesh)
-                vertex_ok = oc_disp.has_vertex_colors()
-            except Exception as e:  # noqa: BLE001
-                print(f"[process_session] OC vertex glb skipped: {e}")
-        if texture_mode in ("cylindrical", "both"):
-            # OC carries a sharp single-atlas UV texture; clean (crop + floater
-            # removal + light smoothing) and move into the normalized frame
-            # (UVs + albedo untouched).
-            textured_ok = photogrammetry.write_normalized_textured_glb(
-                oc.textured, oc_w2n, os.path.join(out_dir, "mesh_textured.glb"),
-                crop_center=np.zeros(3), crop_radius_mm=DISPLAY_CROP_RADIUS_MM,
-                smooth_iters=OC_DISPLAY_TAUBIN_ITERS)
+        vertex_ok, textured_ok = _write_oc_display_meshes(oc, out_dir, texture_mode)
     else:
         # TSDF display: an extra cosmetic Taubin pass (shrink-free, keeps features)
         # so the viewer surface reads as smooth. Vertex count/order preserved, so
@@ -255,6 +240,10 @@ def process_session(raw_dir: str, out_dir: str,
     stats = {
         "reconstruction": "tsdf",          # measurement geometry (always)
         "display_source": display_source,  # geometry shown in the viewer
+        # Depth sessions carry a real measurement mesh. Note the ±0.2 mL volume
+        # validation was done on TrueDepth; rear-LiDAR is measurement-grade in
+        # kind but unvalidated in accuracy until re-tested.
+        "measurement_grade": True,
         "vertices": len(mesh.vertices),
         "triangles": len(mesh.triangles),
         "surface_area_mm2": round(float(mesh.get_surface_area()), 1),
@@ -276,10 +265,122 @@ def process_session(raw_dir: str, out_dir: str,
     return stats
 
 
+def _write_oc_display_meshes(oc, out_dir: str,
+                             texture_mode: str) -> tuple[bool, bool]:
+    """Write mesh.glb / mesh_textured.glb from an Object Capture result.
+
+    OC geometry is already clean — no cosmetic smoothing needed beyond a light
+    Taubin. Normalized into the same canonical face frame the measurement mesh
+    uses (its own recentre — OC and TSDF centroids differ by a few mm,
+    irrelevant for a standalone display model). The tighter face-focused crop
+    (+ keep_main_components inside normalize_to_front_frame) trims OC's gray
+    hair/neck blob halo; the SAME crop radius + recenter (oc_w2n) is reused for
+    the textured mesh so the Smooth/Textured toggle stays aligned."""
+    vertex_ok = textured_ok = False
+    oc_disp, oc_w2n = normalize_to_front_frame(
+        oc.mesh, np.eye(4), radius_mm=DISPLAY_CROP_RADIUS_MM)
+    if OC_DISPLAY_TAUBIN_ITERS:
+        # Taubin drops vertex colours; vertex count/order is preserved, so
+        # re-attach the pre-smoothing colours.
+        colors = oc_disp.vertex_colors
+        oc_disp = oc_disp.filter_smooth_taubin(
+            number_of_iterations=OC_DISPLAY_TAUBIN_ITERS)
+        oc_disp.vertex_colors = colors
+        oc_disp.compute_vertex_normals()
+    if texture_mode in ("vertex", "both"):
+        try:
+            tmesh = o3d.t.geometry.TriangleMesh.from_legacy(oc_disp)
+            o3d.t.io.write_triangle_mesh(os.path.join(out_dir, "mesh.glb"), tmesh)
+            vertex_ok = oc_disp.has_vertex_colors()
+        except Exception as e:  # noqa: BLE001
+            print(f"[process_session] OC vertex glb skipped: {e}")
+    if texture_mode in ("cylindrical", "both"):
+        # OC carries a sharp single-atlas UV texture; clean (crop + floater
+        # removal + light smoothing) and move into the normalized frame
+        # (UVs + albedo untouched).
+        textured_ok = photogrammetry.write_normalized_textured_glb(
+            oc.textured, oc_w2n, os.path.join(out_dir, "mesh_textured.glb"),
+            crop_center=np.zeros(3), crop_radius_mm=DISPLAY_CROP_RADIUS_MM,
+            smooth_iters=OC_DISPLAY_TAUBIN_ITERS)
+    return vertex_ok, textured_ok
+
+
+def _process_photo_only(raw_dir: str, out_dir: str, color_frames, meta: dict,
+                        texture_mode: str) -> dict:
+    """Photo-only session (rear camera, no LiDAR): display meshes only.
+
+    There is no depth, so no mesh.ply is written and the session can never be
+    compared/measured — stats carry measurement_grade: false so clients can
+    say why. Metric scale comes from fitting Object Capture's estimated camera
+    poses to the ARKit world-tracked poses of the same photos (the landmark
+    path needs depth to unproject through). No TSDF fallback exists here: if
+    OC is unavailable, processing fails with a clear error."""
+    if not color_frames:
+        raise ValueError("photo-only session has no color frames to reconstruct from")
+    if os.environ.get("VECTRA_DISABLE_OC") == "1":
+        raise RuntimeError("photo-only session needs Object Capture, "
+                           "but VECTRA_DISABLE_OC=1")
+    if not photogrammetry.tool_available():
+        raise RuntimeError("photo-only session needs the ocrecon tool "
+                           "(tools/photogrammetry) — no depth to fall back to")
+
+    oc = photogrammetry.reconstruct_photo_only(raw_dir, color_frames, out_dir)
+    vertex_ok, textured_ok = _write_oc_display_meshes(oc, out_dir, texture_mode)
+
+    stats = {
+        "reconstruction": "photogrammetry",
+        "display_source": "object_capture",
+        "measurement_grade": False,        # display-only: no depth, no mesh.ply
+        "vertices": len(oc.mesh.vertices),
+        "triangles": len(oc.mesh.triangles),
+        "depth_keyframes": 0,
+        "color_frames": len(color_frames),
+        "textured": vertex_ok,
+        "has_textured_glb": textured_ok,
+        "label": meta.get("label", ""),
+        "captured_at": meta.get("captured_at", ""),
+        "device": meta.get("device", ""),
+        "patient_id": meta.get("patient_id", ""),
+    }
+    stats.update({k: v for k, v in oc.stats.items() if k != "reconstruction"})
+    with open(os.path.join(out_dir, "stats.json"), "w") as f:
+        json.dump(stats, f, indent=2)
+    return stats
+
+
+# Measurement domain for comparisons: the FACE SHELL only, in the normalized
+# face-anchor frame (+z out of the face, +y toward the crown, origin ≈ head
+# centre — identical every session by construction). Hair, collar and
+# shoulders are excluded: on a real subject they move freely between sessions
+# and produced ±12 mm phantom fields that also corrupted the stable-region
+# registration (real-face null test, 2026-07-03). The clinical instrument —
+# like the real VECTRA — measures the face, not the hairstyle.
+FACE_Z_MIN_MM = -10.0     # keep front hemisphere + ears; drop occiput/ponytail
+FACE_Y_MIN_MM = -75.0     # just below the chin; drops collar/shoulders
+FACE_Y_MAX_MM = 65.0      # brow/hairline; drops the top-of-head hair mass
+FACE_R_MAX_MM = 115.0
+
+
+def crop_to_face(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.TriangleMesh:
+    v = np.asarray(mesh.vertices)
+    if len(v) == 0:
+        return mesh
+    keep = ((v[:, 2] > FACE_Z_MIN_MM)
+            & (v[:, 1] > FACE_Y_MIN_MM) & (v[:, 1] < FACE_Y_MAX_MM)
+            & (np.linalg.norm(v, axis=1) <= FACE_R_MAX_MM))
+    out = o3d.geometry.TriangleMesh(mesh)
+    out.remove_vertices_by_mask(~keep)
+    out = keep_main_components(out)
+    out.compute_vertex_normals()
+    return out
+
+
 def compare_sessions_on_disk(before_mesh_path: str, after_mesh_path: str,
                              out_dir: str) -> dict:
     before = o3d.io.read_triangle_mesh(before_mesh_path)
     after = o3d.io.read_triangle_mesh(after_mesh_path)
+    before = crop_to_face(before)
+    after = crop_to_face(after)
     before.compute_vertex_normals()
     after.compute_vertex_normals()
 

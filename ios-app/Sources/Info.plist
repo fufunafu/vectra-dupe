@@ -24,7 +24,7 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>The TrueDepth camera captures 3D scans of the face for volume analysis.</string>
+	<string>The camera captures 3D scans of the face for volume analysis — the front TrueDepth camera in Selfie mode, the rear (LiDAR) camera in Operator mode.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Uploads your face scans to the vectra-dupe processing server running on your local network.</string>
 	<key>UILaunchScreen</key>

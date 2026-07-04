@@ -18,7 +18,9 @@ enum SessionWriter {
 
     static func write(poses: [CapturedPose],
                       colorFrames: [ColorFrameCapture] = [],
-                      patientId: String = "") throws -> URL {
+                      patientId: String = "",
+                      device: String = "iphone-truedepth",
+                      photoOnly: Bool = false) throws -> URL {
         let stamp = ISO8601DateFormatter().string(from: Date())
         let dirName = stamp.replacingOccurrences(of: ":", with: "-")
         let dir = sessionsRoot.appendingPathComponent(dirName, isDirectory: true)
@@ -82,10 +84,13 @@ enum SessionWriter {
         var meta: [String: Any] = [
             "format": "vectra-dupe-session/1",
             "label": dirName,
-            "device": "iphone-truedepth",
+            "device": device,
             "captured_at": stamp,
             "poses": poseEntries,
         ]
+        // Rear capture without LiDAR: no depth poses at all — the server skips
+        // TSDF and builds a display-only photogrammetry mesh.
+        if photoOnly { meta["capture_kind"] = "photo_only" }
         if !colorEntries.isEmpty { meta["color_frames"] = colorEntries }
         // Operator-entered identifier for this capture session (no spaces).
         if !patientId.isEmpty { meta["patient_id"] = patientId }

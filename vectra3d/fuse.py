@@ -24,8 +24,11 @@ def _color_sources(poses, extrinsics, color_frames=(), color_extrinsics=()):
     yield from zip(poses, extrinsics)
     yield from zip(color_frames, color_extrinsics)
 
-VOXEL_MM = 1.0
-SDF_TRUNC_MM = 6.0
+# Fusion resolution. The defaults are tuned for TrueDepth (640x480, ~1-2 mm
+# noise); rear-LiDAR sessions (256x192, noisier) get a wider truncation via
+# processing.py's per-device override. Env-tunable for experiments.
+VOXEL_MM = float(os.environ.get("VECTRA_FUSE_VOXEL_MM", "1.0"))
+SDF_TRUNC_MM = float(os.environ.get("VECTRA_FUSE_SDF_TRUNC_MM", "6.0"))
 # Depth past this (mm) is dropped before fusion. Must exceed the largest
 # camera-to-far-face distance — a profile is captured from ~60 cm, so the back
 # of the head can sit near 70 cm; truncating at 60 cm would clip it. Background
@@ -338,6 +341,7 @@ def integrate(poses: list[PoseCapture],
               extrinsics: list[np.ndarray],
               color_frames: list[ColorFrame] = (),
               color_extrinsics: list[np.ndarray] = (),
+              sdf_trunc_mm: float | None = None,
               ) -> o3d.geometry.TriangleMesh:
     """TSDF-fuse the views (with given extrinsics) into a per-vertex-coloured
     world-frame mesh. This is the geometry used for the volume measurement.
@@ -345,9 +349,12 @@ def integrate(poses: list[PoseCapture],
     Only the depth `poses` drive geometry (TSDF). The colour-only frames are
     depth-less, so they never enter the TSDF or ICP — they only enrich the
     per-vertex colour via bake_vertex_colors. `color_extrinsics` are their
-    world->camera matrices in the same (world) frame as `extrinsics`."""
+    world->camera matrices in the same (world) frame as `extrinsics`.
+    `sdf_trunc_mm` overrides the TrueDepth-tuned truncation (rear-LiDAR depth
+    is noisier and needs a wider band or misaligned noise shreds the surface)."""
     volume = o3d.pipelines.integration.ScalableTSDFVolume(
-        voxel_length=VOXEL_MM, sdf_trunc=SDF_TRUNC_MM,
+        voxel_length=VOXEL_MM,
+        sdf_trunc=SDF_TRUNC_MM if sdf_trunc_mm is None else sdf_trunc_mm,
         color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8)
     for pose, ext in zip(poses, extrinsics):
         h, w = pose.depth.shape

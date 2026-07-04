@@ -4,6 +4,7 @@ Run:  ../.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8008
 (from the server/ directory; the iOS app and web viewer talk to this)
 """
 
+import json
 import os
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
@@ -145,7 +146,18 @@ def compare(pid: str, body: CompareIn):
         raise HTTPException(404, str(e))
     for path, sid in ((before_mesh, body.before), (after_mesh, body.after)):
         if not os.path.exists(path):
-            raise HTTPException(400, f"session {sid} is not processed yet")
+            # A photo-only (rear, no-LiDAR) session processes fine but never
+            # writes a measurement mesh — tell the caller why, not just "wait".
+            detail = f"session {sid} is not processed yet"
+            stats_path = os.path.join(os.path.dirname(path), "stats.json")
+            try:
+                with open(stats_path) as f:
+                    if json.load(f).get("measurement_grade") is False:
+                        detail = (f"session {sid} is photo-only (no depth) — "
+                                  "it has no measurement mesh to compare")
+            except (OSError, json.JSONDecodeError):
+                pass
+            raise HTTPException(400, detail)
     out_dir = store.compare_dir(pid, body.before, body.after)
     try:
         summary = processing.compare_sessions_on_disk(before_mesh, after_mesh, out_dir)

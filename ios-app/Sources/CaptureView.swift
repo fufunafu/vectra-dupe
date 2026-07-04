@@ -6,11 +6,10 @@ struct CaptureView: View {
     @State private var modelToView: IdentifiedURL?
     @State private var askingPatientID = false
     @State private var patientIDField = ""
-    /// Operator mode: photographing someone else. Mirrors the preview so the
-    /// subject reads naturally to the operator, and enlarges the live readouts
-    /// for arm's-length use. Purely cosmetic — depth capture (front TrueDepth)
-    /// and the alignment gates are unaffected. Selfie mode is the mirrored
-    /// self-view people expect from a front camera.
+    /// Operator mode: photographing someone else with the BACK camera (world
+    /// tracking + LiDAR depth on Pro devices, photo-only elsewhere). Selfie
+    /// mode is the original front-TrueDepth self-capture with the mirrored
+    /// preview people expect from a front camera.
     @AppStorage("captureOperatorMode") private var operatorMode = false
     /// Eyes-free tone + haptic guidance during capture (default on). Toggle lives
     /// in Settings; mirrored here via the shared UserDefaults key.
@@ -73,13 +72,15 @@ struct CaptureView: View {
             }
             .onAppear {
                 controller.setViewportSize(fullScreenSize(geo))
-                controller.isSelfie = !operatorMode
+                controller.setMode(operatorMode ? .operatorRear : .selfieFront)
                 controller.cues.enabled = soundGuidance
                 controller.autoStart()
             }
             .onDisappear { controller.leaveCaptureTab() }
             .onChange(of: geo.size) { _, _ in controller.setViewportSize(fullScreenSize(geo)) }
-            .onChange(of: operatorMode) { _, isOperator in controller.isSelfie = !isOperator }
+            .onChange(of: operatorMode) { _, isOperator in
+                controller.setMode(isOperator ? .operatorRear : .selfieFront)
+            }
             .onChange(of: soundGuidance) { _, on in controller.cues.enabled = on }
             .sheet(item: $modelToView) { item in
                 NavigationStack {
@@ -127,7 +128,7 @@ struct CaptureView: View {
     /// Return to a live preview (real camera) or re-run the demo, so the
     /// operator can frame the next subject before tapping Start again.
     private func restart() {
-        if CaptureController.hasTrueDepth { controller.startPreview() }
+        if controller.captureSupported { controller.startPreview() }
         else { controller.startDemo() }
     }
 
@@ -139,22 +140,42 @@ struct CaptureView: View {
 
     // MARK: - Selfie / Operator toggle
 
-    /// Switches between mirrored self-view and an un-mirrored operator view for
-    /// photographing someone else. Both use the front TrueDepth camera.
+    /// Switches camera pipelines: Selfie = mirrored front-TrueDepth
+    /// self-capture; Operator = back camera pointed at someone else (LiDAR
+    /// depth on Pro devices, photo-only otherwise). Locked mid-capture — the
+    /// two pipelines can't be swapped without restarting the session.
     private var modeToggle: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.2)) { operatorMode.toggle() }
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: operatorMode ? "person.2.fill" : "person.crop.square")
-                Text(operatorMode ? "Operator" : "Selfie")
+        VStack(alignment: .trailing, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { operatorMode.toggle() }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: operatorMode ? "person.2.fill" : "person.crop.square")
+                    Text(operatorMode ? "Operator" : "Selfie")
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
             }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+            .disabled(controller.phase.isActive)
+            .opacity(controller.phase.isActive ? 0.4 : 1)
+
+            // Rear capture quality badge: LiDAR devices get measurement-grade
+            // depth; the rest get a display-only photogrammetry scan.
+            if operatorMode {
+                Label(controller.capturesDepth ? "LiDAR depth"
+                                               : "Photo only — no measurements",
+                      systemImage: controller.capturesDepth
+                        ? "square.3.layers.3d.down.right" : "camera")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
         }
     }
 
@@ -208,8 +229,12 @@ struct CaptureView: View {
                           icon: "ruler")
             CriterionChip(title: "Level", ok: controller.guidance.levelOK,
                           icon: "level")
-            CriterionChip(title: "Neutral", ok: controller.guidance.expressionNeutral,
-                          icon: "face.smiling")
+            // The rear camera has no blendshapes, so there is no expression
+            // gate to report in Operator mode.
+            if !operatorMode {
+                CriterionChip(title: "Neutral", ok: controller.guidance.expressionNeutral,
+                              icon: "face.smiling")
+            }
         }
     }
 
@@ -275,11 +300,11 @@ struct CaptureView: View {
 
                     Button { restart() } label: {
                         Label("Capture again",
-                              systemImage: CaptureController.hasTrueDepth
+                              systemImage: controller.captureSupported
                                 ? "arrow.clockwise" : "wand.and.stars")
                     }
                     .buttonStyle(GhostButtonStyle())
-                } else if CaptureController.hasTrueDepth {
+                } else if controller.captureSupported {
                     Button { promptStart() } label: {
                         Label("Start capture", systemImage: "viewfinder")
                     }
@@ -296,7 +321,9 @@ struct CaptureView: View {
                     }
                     .buttonStyle(PrimaryButtonStyle())
 
-                    Label("No TrueDepth camera detected — demo mode renders a sample scan.",
+                    Label(operatorMode
+                            ? "This device can't run rear-camera AR — demo mode renders a sample scan."
+                            : "No TrueDepth camera detected — demo mode renders a sample scan.",
                           systemImage: "info.circle")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.6))
@@ -696,6 +723,9 @@ extension CaptureController.GuidanceState {
     /// View-local mirrors of the controller's gates, used only for the
     /// per-criterion feedback chips (the controller's `aligned` stays
     /// authoritative for the capture trigger).
-    var distanceOK: Bool { distanceMM > 250 && distanceMM < 500 }
-    var levelOK: Bool { abs(rollDeg) < 10 && abs(pitchDeg) < 10 }
+    // Must match the controller's minDistMM/maxDistMM and roll/pitch
+    // tolerances (profiles get +5° pitch), or the chips show red while the
+    // controller is actually satisfied.
+    var distanceOK: Bool { distanceMM > 250 && distanceMM < 620 }
+    var levelOK: Bool { abs(rollDeg) < 10 && abs(pitchDeg) < 15 }
 }

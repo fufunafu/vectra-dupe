@@ -12,8 +12,9 @@ targets:
       path: Sources/Info.plist
       properties:
         NSCameraUsageDescription: >-
-          The TrueDepth camera captures 3D scans of the face for volume
-          analysis.
+          The camera captures 3D scans of the face for volume analysis —
+          the front TrueDepth camera in Selfie mode, the rear (LiDAR) camera
+          in Operator mode.
         NSLocalNetworkUsageDescription: >-
           Uploads your face scans to the vectra-dupe processing server running
           on your local network.
@@ -28,3 +29,4 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: PQ884XTDXF
