@@ -29,6 +29,7 @@ PROGRESS = [
     ("[vggt] running forward", 30, "AI reconstructing 3D (this is the slow part)"),
     ("[vggt] forward done", 58, "3D geometry recovered"),
     ("[recon] done", 66, "Saved point cloud"),
+    ("[calibrate] pose graph", 70, "Calibrating camera poses"),
     ("[mesh] tsdf", 80, "Built surface mesh"),
     ("[mesh] alpha-shape", 80, "Built surface mesh"),
     ("[render] wrote", 90, "Rendered views"),
@@ -76,7 +77,9 @@ def _job_worker(job_id: str, visit: str):
 @app.get("/", response_class=HTMLResponse)
 def index():
     with open(os.path.join(STATIC, "index.html")) as f:
-        return f.read()
+        # no-store: WKWebView (the pywebview window) otherwise keeps serving a
+        # stale cached page across app relaunches
+        return HTMLResponse(f.read(), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/visits")

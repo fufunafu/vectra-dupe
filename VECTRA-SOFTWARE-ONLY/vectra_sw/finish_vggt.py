@@ -11,6 +11,15 @@ from . import meshing, render_views, compare
 
 
 def run(visit_dir: str, out_dir: str, mesh_fill: bool = True):
+    # Global consistency step FIRST: aligns the per-view maps and rewrites
+    # vggt_perview.npz / vggt_raw.npz in place, so everything loaded below
+    # (TSDF depths, texture extrinsics, render cloud) is already calibrated.
+    from . import calibrate
+    try:
+        calibrate.ensure_calibrated(out_dir)
+    except Exception as e:  # noqa: BLE001 — calibration is best-effort
+        print(f"[calibrate] skipped ({e})", flush=True)
+
     d = np.load(os.path.join(out_dir, "vggt_raw.npz"))
     pts, cols = d["points"], d["colors"]
     extr = [np.vstack([e, [0, 0, 0, 1]]) for e in d["extrinsic"]]
