@@ -1,0 +1,1221 @@
+{
+  "_meta": {
+    "source": "docs/filler-region-rules.md (book review 2026-09-08)",
+    "units": {
+      "thickness": "mm",
+      "volume": "mL",
+      "gprime": "Pa at 0.1 Hz unless noted",
+      "time": "weeks"
+    },
+    "evidence_grades": {
+      "A": "measured, n or SD stated",
+      "B": "expert numeric range",
+      "C": "qualitative consensus >=2 books",
+      "none": "no source"
+    },
+    "classes": {
+      "P": "bone-backed projection: supraperiosteal, wide smooth spread, high surface yield, long persistence",
+      "D": "deep-space absorption: volume partly lost into compliant deep space, low yield per mL",
+      "T": "thin-skin low-volume: oedema-dominated early, high visibility per mL",
+      "M": "mobile/muscular: migration, faster loss, SAT placement gives localized projection",
+      "X": "danger overlay: vascular-risk constraint"
+    },
+    "landmarks": "MediaPipe FaceLandmarker 478 indices, subject's right side; left side via vectra3d/_facemesh_mirror.py. [index, anchor, k] entries extrapolate beyond the mesh to the hairline. Source of truth: vectra3d/face_regions.py",
+    "global_time_curve_prior": {
+      "source": "ArtSci p.54-55",
+      "grade": "B",
+      "volume_factor": {
+        "0": 1.0,
+        "4": 1.8,
+        "16": 0.75,
+        "64": 1.0
+      },
+      "height_factor": {
+        "0": 1.0,
+        "4": 0.67
+      },
+      "width_factor": {
+        "0": 1.0,
+        "4": 1.8,
+        "32": 1.8,
+        "64": 1.0
+      },
+      "note": "scan at 1-4 wk measures hydration/oedema; treat >=8-16 wk as settled"
+    },
+    "perceptive_thresholds_mm": {
+      "eyelid": 2,
+      "commissure": 3,
+      "brow": 3.5,
+      "nasal_tip": 4,
+      "chin": 6,
+      "source": "PRSFund p.603",
+      "grade": "A"
+    },
+    "scanner_noise": {
+      "repeat_rms_mm": 0.23,
+      "volume_floor_ml": 0.12,
+      "source": "PLAN.md phase 0"
+    },
+    "must_fit_from_scans": [
+      "surface_yield",
+      "footprint_radius_mm",
+      "peak_displacement_per_ml",
+      "half_life_weeks",
+      "region_time_scaling"
+    ]
+  },
+  "regions": [
+    {
+      "id": "forehead",
+      "class": [
+        "P"
+      ],
+      "overlay": [
+        "X_glabella_edge"
+      ],
+      "boundary": "trichion to brows; lateral limit temporal fusion line (AnatFFN p.7-8)",
+      "thickness": {
+        "skin": 1.7,
+        "skin_sd": 0.71,
+        "fat": 1.99,
+        "fat_sd": 1.21,
+        "to_bone": 4.7,
+        "to_bone_sd": 0.3,
+        "muscle_depth": [
+          2.0,
+          3.3
+        ],
+        "grade": "A",
+        "source": "ClinAnat p.6, p.10"
+      },
+      "plane": {
+        "default": "supraperiosteal/subgaleal",
+        "grade": "C",
+        "source": "ClinAnat p.102; ArtSci p.131; MinInv p.15"
+      },
+      "volume": {
+        "typical": null,
+        "max": null,
+        "grade": "none"
+      },
+      "gprime": {
+        "band": "medium, firmer preferred",
+        "grade": "B",
+        "source": "ArtSci p.131; USArticle Fig 2"
+      },
+      "spread": {
+        "pattern": "wide smooth",
+        "yield_prior": "high",
+        "grade": "C"
+      },
+      "time_modifiers": {
+        "oedema_resolves_days": [
+          2,
+          3
+        ],
+        "source": "ArtSci p.200"
+      },
+      "persistence": {
+        "rank": "long",
+        "grade": "C"
+      },
+      "mobility": {
+        "flag": "frontalis moves soft gel; step at aponeurotic upper third",
+        "source": "ArtSci p.131; ClinAnat p.106"
+      },
+      "danger": [
+        "supraorbital a. splits 1 cm above rim",
+        "supratrochlear superficial 1.5 mm above rim",
+        "midline subcutaneous vessels 52-60%",
+        "frontal br. STA 2 cm above lateral brow",
+        "SON 27 mm / STN 17 mm from midline",
+        "ultrasound mandatory"
+      ],
+      "variation": "Korean data; Asians prefer convex forehead",
+      "landmark_idx": [
+        [
+          10,
+          151,
+          2.7
+        ],
+        [
+          109,
+          108,
+          2.6
+        ],
+        [
+          67,
+          69,
+          2.4
+        ],
+        [
+          103,
+          104,
+          1.7
+        ],
+        54,
+        68,
+        63,
+        105,
+        66,
+        107,
+        9,
+        336,
+        296,
+        334,
+        293,
+        298,
+        284,
+        [
+          332,
+          333,
+          1.7
+        ],
+        [
+          297,
+          299,
+          2.4
+        ],
+        [
+          338,
+          337,
+          2.6
+        ]
+      ],
+      "landmark_bilateral": false
+    },
+    {
+      "id": "glabella",
+      "class": [
+        "M",
+        "P"
+      ],
+      "overlay": [
+        "X"
+      ],
+      "boundary": "between medial brows, lines 1-1.5 cm above frontal notch (ClinAnat p.102)",
+      "thickness": {
+        "skin": 1.67,
+        "skin_sd": 0.83,
+        "fat": 1.82,
+        "fat_sd": 1.22,
+        "procerus_depth": [
+          2.9,
+          3.8
+        ],
+        "corrugator_thickness": [
+          2,
+          3
+        ],
+        "grade": "A",
+        "source": "ClinAnat p.6, p.12; ArtSci p.130"
+      },
+      "plane": {
+        "default": "supraperiosteal/subprocerus for depression; subdermal SAT for lines",
+        "grade": "C"
+      },
+      "volume": {
+        "grade": "none"
+      },
+      "gprime": {
+        "band": "high (radix/glabella high external pressure)",
+        "grade": "B",
+        "source": "ArtSci p.37"
+      },
+      "spread": {
+        "pattern": "localized (SAT) or wide (deep)",
+        "yield_prior": "high",
+        "grade": "C"
+      },
+      "persistence": {
+        "rank": "shorter if dermal",
+        "grade": "C"
+      },
+      "mobility": {
+        "flag": "corrugator/procerus; toxin first",
+        "source": "MinInv p.177"
+      },
+      "danger": [
+        "highest blindness rate of any site",
+        "ophthalmic a. emergence 14 mm above / 4 mm medial to medial canthus, 5 mm deep",
+        "intercanthal vein subcutaneous 71-100%",
+        "cannula + ultrasound mandatory"
+      ],
+      "landmark_idx": [
+        107,
+        9,
+        336,
+        285,
+        417,
+        168,
+        193,
+        55
+      ],
+      "landmark_bilateral": false
+    },
+    {
+      "id": "brow_upper_sulcus",
+      "class": [
+        "T"
+      ],
+      "boundary": "brow lateral to mid-pupil; preseptal space below ORL (ArtSci p.138, 141)",
+      "thickness": {
+        "skin": [
+          0.38,
+          0.8
+        ],
+        "fat": 0,
+        "grade": "A",
+        "source": "ClinAnat p.5; DermUS p.90"
+      },
+      "plane": {
+        "default": "submuscular ROOF (brow); preseptal sub-orbicularis (sulcus)",
+        "grade": "C"
+      },
+      "volume": {
+        "fat_per_brow": [
+          1,
+          3
+        ],
+        "fat_per_sulcus": [
+          1,
+          2
+        ],
+        "ha": null,
+        "grade": "B",
+        "source": "Periorb p.91-92"
+      },
+      "gprime": {
+        "band": "soft moldable",
+        "grade": "B"
+      },
+      "spread": {
+        "pattern": "localized",
+        "yield_prior": "very high visibility per mL",
+        "grade": "C"
+      },
+      "mobility": {
+        "flag": "overcorrection migrates into lid",
+        "source": "ArtSci p.138"
+      },
+      "danger": [
+        "supraorbital/supratrochlear anastomose with orbital arteries",
+        "contraindicated in ptosis/proptosis"
+      ],
+      "variation": "brow descends ~2.5 mm per 20 yr (PRSFund p.607)",
+      "landmark_idx": [
+        70,
+        63,
+        105,
+        66,
+        107,
+        55,
+        221,
+        222,
+        223,
+        224,
+        46
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "temple",
+      "class": [
+        "D"
+      ],
+      "overlay": [
+        "X"
+      ],
+      "boundary": "temporal fossa lateral to fusion line; hollow just above the arch (ArtSci p.77)",
+      "thickness": {
+        "skin": 1.65,
+        "skin_sd": 0.91,
+        "fat": 2.58,
+        "fat_sd": 1.68,
+        "tpf": [
+          2,
+          3
+        ],
+        "to_bone": "variable, 28 mm in one patient",
+        "grade": "A",
+        "source": "ClinAnat p.6; USProto p.31; USArticle Fig 10"
+      },
+      "layers_us": [
+        "skin",
+        "subcut fat",
+        "STF",
+        "loose areolar",
+        "sup lamina DTF",
+        "sup temporal fat",
+        "deep lamina DTF",
+        "Bichat extension",
+        "temporalis",
+        "bone"
+      ],
+      "plane": {
+        "default": "interfascial STF-DTF (ArtSci, MinInv) or supraperiosteal deep to temporalis (ClinAnat)",
+        "grade": "C"
+      },
+      "volume": {
+        "fat_per_temple": [
+          2,
+          3
+        ],
+        "ha": null,
+        "grade": "B",
+        "source": "Periorb p.92"
+      },
+      "gprime": {
+        "band": "medium interfascial (338 Pa @0.02 Hz); high if deep",
+        "grade": "B",
+        "source": "MinInv p.111; ArtSci p.208"
+      },
+      "spread": {
+        "pattern": "wide",
+        "yield_prior": "lowest of any region when deep",
+        "grade": "C",
+        "source": "ArtSci p.136; ClinAnat p.120"
+      },
+      "persistence": {
+        "rank": "long deep",
+        "grade": "C"
+      },
+      "mobility": {
+        "flag": "temporalis contraction moves deep gel",
+        "source": "ArtSci p.77"
+      },
+      "danger": [
+        "STA bifurcation 37 mm above / 18 mm anterior to tragus",
+        "middle temporal vein ~5 mm at 2 cm above arch",
+        "sentinel vein 2 mm",
+        "VII temporal branch 1.5-3 cm above arch",
+        "deep temporal a. on bone",
+        "ultrasound mandatory"
+      ],
+      "landmark_idx": [
+        54,
+        71,
+        70,
+        156,
+        124,
+        143,
+        34,
+        127,
+        162,
+        [
+          21,
+          70,
+          1.6
+        ]
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "tear_trough",
+      "class": [
+        "T"
+      ],
+      "boundary": "medial canthus to mid-pupil, ~3 cm long, 2-3 mm below rim (ArtSci p.147); nasojugal 45 deg inferolateral (AnatFFN p.33)",
+      "thickness": {
+        "skin_lid": [
+          0.37,
+          2.0
+        ],
+        "fat_lid": 0,
+        "skin_below_rim": 1.97,
+        "fat_below_rim": 4.93,
+        "fat_sd": 2.98,
+        "orbicularis": 1.56,
+        "orbicularis_depth": [
+          0.88,
+          2.8
+        ],
+        "grade": "A",
+        "source": "MinInv p.41, 177; ClinAnat p.6"
+      },
+      "plane": {
+        "default": "supraperiosteal sub-orbicularis along rim; SOOF deep + thin subdermal finish",
+        "grade": "C",
+        "source": "Periorb p.82; ClinAnat p.126; ArtSci p.152"
+      },
+      "volume": {
+        "typical_per_side": [
+          0.2,
+          0.3
+        ],
+        "published_mean": 0.26,
+        "published_range": [
+          0.08,
+          0.32
+        ],
+        "max_per_side": 0.5,
+        "md_codes_per_side": {
+          "Tt1": 0.2,
+          "Tt2": 0.2,
+          "Tt3": 0.1
+        },
+        "per_pass": [
+          0.1,
+          0.2
+        ],
+        "fat": [
+          2,
+          3
+        ],
+        "grade": "B",
+        "source": "MinInv p.51; Periorb p.82"
+      },
+      "gprime": {
+        "band": "lowest, low water retention (Volbella 99 Pa, Belotero Balance 21.7 Pa @0.02 Hz)",
+        "grade": "B",
+        "source": "MinInv p.49, 70"
+      },
+      "spread": {
+        "pattern": "localized, tunnel wider than target",
+        "yield_prior": "highest visibility per mL",
+        "grade": "C"
+      },
+      "time_modifiers": {
+        "hydrophilic_swell_weeks": [
+          1,
+          2
+        ],
+        "saturation_weeks": 8,
+        "followup_weeks": 8,
+        "delayed_complication_onset_months": 16.8,
+        "source": "ClinAnat p.126; MinInv p.141, 56"
+      },
+      "persistence": {
+        "months": ">12",
+        "grade": "B",
+        "source": "MinInv p.141"
+      },
+      "mobility": {
+        "flag": "orbicularis pushes superficial gel; supraperiosteal gel can lie in muscle and surface",
+        "source": "MinInv p.57"
+      },
+      "danger": [
+        "detoured infraorbital br. of facial a. in ~30% Asians",
+        "infraorbital foramen 6-10 mm below rim, 2-3 cm from midline",
+        "infraorbital a. 3.1 mm deep (n=1)",
+        "malar septum: gel above it -> chronic oedema"
+      ],
+      "variation": "Asians thicker skin/more fat; haemosiderin Fitzpatrick 4-6; junction lower in men",
+      "landmark_idx": [
+        133,
+        243,
+        112,
+        26,
+        22,
+        23,
+        230,
+        231,
+        232,
+        128,
+        245,
+        244
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "palpebromalar_midcheek",
+      "class": [
+        "T",
+        "P"
+      ],
+      "boundary": "mid-pupil to lateral canthus along ORL; midcheek groove along zygomatico-cutaneous ligament (ArtSci p.147-151)",
+      "thickness": {
+        "reuse": "tear_trough / zygomatic",
+        "grade": "A"
+      },
+      "plane": {
+        "default": "supraperiosteal between ORL and ZC ligament, entry 3 cm below lateral canthus; ligament tunnelling for midcheek",
+        "grade": "C",
+        "source": "MinInv p.52; ArtSci p.156-157"
+      },
+      "volume": {
+        "max": 1.0,
+        "first_visit": [
+          0.5,
+          1.0
+        ],
+        "grade": "B",
+        "source": "MinInv p.52"
+      },
+      "gprime": {
+        "band": "medium; medium-high deep under ZC ligament",
+        "grade": "B"
+      },
+      "spread": {
+        "pattern": "localized",
+        "yield_prior": "high",
+        "grade": "C",
+        "note": "filler above the crease makes it look deeper (ArtSci p.72)"
+      },
+      "landmark_idx": [
+        23,
+        24,
+        110,
+        25,
+        130,
+        226,
+        31,
+        228,
+        229,
+        230
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "zygomatic_malar",
+      "class": [
+        "P"
+      ],
+      "boundary": "prezygomatic space; apex at alar-groove->helix line x lateral-canthus->commissure line (Asian) (ArtSci p.157); zygomatic ligament ~45 mm anterior to tragus, width 14.5 mm (AnatFFN p.58-59)",
+      "thickness": {
+        "skin": 1.85,
+        "skin_sd": 1.03,
+        "fat": 4.54,
+        "fat_sd": 2.71,
+        "grade": "A",
+        "source": "ClinAnat p.6"
+      },
+      "plane": {
+        "default": "supraperiosteal / prezygomatic bolus, 0.05-0.1 mL aliquots",
+        "grade": "C",
+        "source": "ArtSci p.158; PSCurr p.1119; MinInv p.15"
+      },
+      "volume": {
+        "case_cheeks_plus_temples": 3.0,
+        "fat_per_deep_compartment": [
+          2,
+          3
+        ],
+        "grade": "B",
+        "source": "PRSFund p.615; PSCurr p.1195"
+      },
+      "gprime": {
+        "band": "high supraperiosteal; cohesive softer anterior cheek",
+        "grade": "B"
+      },
+      "spread": {
+        "pattern": "oval pocket on periosteum",
+        "yield_prior": "high",
+        "lift_coupling": "anterior malar lifts NLF; side cheek lifts jawline (ArtSci p.89)",
+        "grade": "C"
+      },
+      "persistence": {
+        "rank": "years by MRI",
+        "grade": "B",
+        "source": "MinInv p.148"
+      },
+      "danger": [
+        "transverse facial a. perforator at McGregor's patch",
+        "zygomaticofacial foramen 2 cm lateral + 2 cm inferior to lateral canthus",
+        "ultrasound recommended"
+      ],
+      "variation": "Koreans: no midface bone loss, augment soft-tissue plane (ArtSci p.6, 81)",
+      "landmark_idx": [
+        111,
+        228,
+        229,
+        230,
+        119,
+        101,
+        36,
+        50,
+        123,
+        116
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "deep_medial_cheek",
+      "class": [
+        "D"
+      ],
+      "boundary": "anterior midface triangle between lower lid and NLF (AnatFFN p.32); premaxillary space between ZC and buccal-maxillary ligaments (ArtSci p.82)",
+      "thickness": {
+        "reuse": "zygomatic_malar",
+        "grade": "A"
+      },
+      "plane": {
+        "default": "deep cheek fat under SMAS above zygomaticus, spread evenly, no boluses",
+        "grade": "C",
+        "source": "ArtSci p.158"
+      },
+      "volume": {
+        "fat_per_compartment": [
+          2,
+          3
+        ],
+        "grade": "B",
+        "source": "PSCurr p.1195"
+      },
+      "spread": {
+        "pattern": "oval pocket in deep fat pad, stable for months",
+        "yield_prior": "moderate",
+        "grade": "C",
+        "source": "DermUS p.526"
+      },
+      "danger": [
+        "facial vein along nasojugal groove, deeper than deep fat near NLF"
+      ],
+      "landmark_idx": [
+        231,
+        232,
+        128,
+        188,
+        174,
+        236,
+        134,
+        131,
+        49,
+        203,
+        206,
+        36,
+        101,
+        119,
+        120
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "lateral_cheek_buccal",
+      "class": [
+        "D"
+      ],
+      "boundary": "below arch to mid-masseter, masseter borders (ClinAnat p.142); masseteric ligaments 42 mm anterior to tragus (AnatFFN p.59); buccal fat ~10 mL (ArtSci p.70)",
+      "thickness": {
+        "reuse": "zygomatic_malar",
+        "note": "fat over parotid notoriously thin (DermUS p.528)",
+        "grade": "A"
+      },
+      "plane": {
+        "default": "subcutaneous over masseter (mild); preparotid-premasseteric sub-SMAS after partial tunnelling (severe); prebuccal, not into buccal fat",
+        "grade": "C",
+        "source": "ArtSci p.83-86, 161-163; ClinAnat p.139-143"
+      },
+      "volume": {
+        "grade": "none",
+        "note": "buccal fat 'requires a large volume' (ClinAnat p.139)"
+      },
+      "spread": {
+        "pattern": "meandering between muscle fibres if deep to masseter",
+        "yield_prior": "low",
+        "grade": "C",
+        "source": "DermUS p.526; ClinAnat p.143"
+      },
+      "danger": [
+        "parotid duct 2 cm below arch, 2-3 mm",
+        "transverse facial a. loops",
+        "buccal branch VII"
+      ],
+      "variation": "Asians fill below the arch, not on it",
+      "landmark_idx": [
+        123,
+        50,
+        36,
+        206,
+        216,
+        186,
+        57,
+        43,
+        202,
+        210,
+        135,
+        138,
+        215,
+        213,
+        147
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "nose",
+      "class": [
+        "P"
+      ],
+      "overlay": [
+        "X"
+      ],
+      "boundary": "radix (intercanthal line in Asians) to tip and columella",
+      "thickness": {
+        "skin_radix": 1.51,
+        "skin_sd": 0.55,
+        "fat_radix": 1.61,
+        "fat_sd": 1.07,
+        "skin_tip": 2.0,
+        "fat_tip": 0,
+        "grade": "A",
+        "source": "ClinAnat p.4-6; ArtSci p.168"
+      },
+      "plane": {
+        "default": "supraperiosteal/supraperichondrial only; columella deep subcutaneous",
+        "grade": "C"
+      },
+      "volume": {
+        "columella": [
+          0.2,
+          0.5
+        ],
+        "tip": "droplet",
+        "grade": "B",
+        "source": "ClinAnat p.153"
+      },
+      "gprime": {
+        "band": "high, low swelling; monophasic widens dorsum",
+        "grade": "B"
+      },
+      "spread": {
+        "pattern": "localized column",
+        "yield_prior": "high; radix sinks under pressure if soft",
+        "grade": "C"
+      },
+      "danger": [
+        "dorsal nasal a. superficial over bony dorsum, deep over cartilage",
+        "40.6% of vision-loss cases",
+        "highest compression-necrosis risk",
+        "post-rhinoplasty arteries fixed by scar",
+        "ultrasound mandatory"
+      ],
+      "landmark_idx": [
+        168,
+        193,
+        122,
+        196,
+        3,
+        236,
+        134,
+        131,
+        49,
+        102,
+        64,
+        98,
+        97,
+        2,
+        326,
+        327,
+        294,
+        331,
+        279,
+        360,
+        363,
+        456,
+        248,
+        419,
+        351,
+        417
+      ],
+      "landmark_bilateral": false
+    },
+    {
+      "id": "pyriform_nasolabial",
+      "class": [
+        "P",
+        "M"
+      ],
+      "overlay": [
+        "X"
+      ],
+      "boundary": "alar-facial crease to commissure; Ristow's space at canine fossa (ArtSci p.73, 82)",
+      "thickness": {
+        "fat_lateral_to_fold": 5.14,
+        "fat_sd": 3.31,
+        "skin": 1.82,
+        "note": "abrupt change across the fold",
+        "grade": "A",
+        "source": "ClinAnat p.4, 6"
+      },
+      "plane": {
+        "default": "firm deep in Ristow's/canine fossa first, then soft subdermal along crease",
+        "grade": "C",
+        "source": "ArtSci p.174-176; ClinAnat p.136; MinInv p.110"
+      },
+      "volume": {
+        "pyriform_bolus": [
+          0.1,
+          0.2
+        ],
+        "crease": null,
+        "grade": "B",
+        "source": "PSCurr p.1118"
+      },
+      "gprime": {
+        "band": "firm deep / soft superficial; no free-HA dilution at mouth corners",
+        "grade": "B"
+      },
+      "spread": {
+        "pattern": "deep -> projection; large subcutaneous -> lateral expansion",
+        "yield_prior": "high deep, moderate superficial",
+        "grade": "C",
+        "source": "ArtSci p.176"
+      },
+      "mobility": {
+        "flag": "deep gel migrates superolaterally with expression; deep gel crosses above crease into premaxillary space unless blocked",
+        "source": "ArtSci p.59, 82"
+      },
+      "danger": [
+        "facial a. 3.2+-4.5 mm lateral to ala, medial to fold >70% Koreans, within 5 mm in 43%",
+        "exposed segment ~15 mm lateral to cheilion",
+        "superior labial a. min 3 mm deep in 1.5 cm square above cheilion",
+        "blindness-risk region"
+      ],
+      "landmark_idx": [
+        49,
+        64,
+        98,
+        165,
+        40,
+        185,
+        61,
+        57,
+        186,
+        92,
+        206,
+        203
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "lips",
+      "class": [
+        "M"
+      ],
+      "boundary": "vermilion, philtrum, commissures",
+      "thickness": {
+        "lip_upper": 9.4,
+        "lip_upper_sd": 0.4,
+        "lip_lower": 10.9,
+        "lip_lower_sd": 0.7,
+        "subcut_fat": 0,
+        "labial_a_diameter": 1.0,
+        "grade": "A",
+        "source": "ClinAnat p.158; DermUS p.90; ArtSci p.179"
+      },
+      "plane": {
+        "default": "submucosal/superficial fat at dry-wet junction for volume; dermal along border for definition",
+        "grade": "C"
+      },
+      "volume": {
+        "typical_per_lip": [
+          0.3,
+          0.4
+        ],
+        "tubercle": [
+          0.1,
+          0.2
+        ],
+        "max_per_lip": 1.5,
+        "lip_lines_per_session": 1.0,
+        "grade": "B",
+        "source": "ArtSci p.180-181; MinInv p.99"
+      },
+      "gprime": {
+        "band": [
+          150,
+          220
+        ],
+        "note": "HA only, never CaHA",
+        "grade": "B",
+        "source": "MinInv p.99"
+      },
+      "spread": {
+        "pattern": "localized",
+        "yield_prior": "moderate; >1.5 mL thickens rather than rotates",
+        "grade": "C"
+      },
+      "time_modifiers": {
+        "loss_at_1wk_fraction": [
+          0.1,
+          0.2
+        ],
+        "source": "ArtSci p.181",
+        "grade": "B"
+      },
+      "persistence": {
+        "rank": "shorter, very dynamic",
+        "grade": "C"
+      },
+      "danger": [
+        "persistent-caliber labial artery in dermis",
+        "labial arteries in wet-mucosal layer 28-57%"
+      ],
+      "variation": "superficial lip fat up with age, deep down, total conserved (ArtSci p.179)",
+      "landmark_idx": [
+        61,
+        185,
+        40,
+        39,
+        37,
+        0,
+        267,
+        269,
+        270,
+        409,
+        291,
+        375,
+        321,
+        405,
+        314,
+        17,
+        84,
+        181,
+        91,
+        146
+      ],
+      "landmark_bilateral": false
+    },
+    {
+      "id": "marionette_commissure",
+      "class": [
+        "M"
+      ],
+      "boundary": "modiolus to mandibular border along DAO; modiolus 11.0+-2.6 mm lateral, 8.9+-2.8 mm below cheilion (Asian) (ClinAnat p.17)",
+      "thickness": {
+        "note": "abrupt subcutaneous thinning at the line; skin thicker than upper lip",
+        "grade": "C",
+        "source": "ClinAnat p.4; MinInv p.99"
+      },
+      "plane": {
+        "default": "subdermal release + subcutaneous above muscle; sub-DAO fat for deep hollows; cross-hatch",
+        "grade": "C"
+      },
+      "volume": {
+        "marionette": [
+          0.5,
+          1.0
+        ],
+        "commissure_per_side": [
+          0.2,
+          0.4
+        ],
+        "grade": "B",
+        "source": "MinInv p.99"
+      },
+      "gprime": {
+        "band": "<200 (MinInv Ch5) or 250-350 (MinInv Ch7), contradictory",
+        "grade": "B"
+      },
+      "spread": {
+        "pattern": "localized",
+        "yield_prior": "moderate; volume outside the line adds heaviness",
+        "grade": "C"
+      },
+      "danger": [
+        "inferior labial a.",
+        "mental foramen 2 cm below commissure",
+        "medial to facial a. -> low occlusion risk"
+      ],
+      "landmark_idx": [
+        61,
+        43,
+        202,
+        210,
+        211,
+        170,
+        149,
+        140,
+        32,
+        194,
+        182,
+        106
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "chin",
+      "class": [
+        "P"
+      ],
+      "boundary": "labiomental crease to menton; laterally to mandibular ligament/prejowl; labiomental depth 4 mm F / 6 mm M (PRSFund p.728)",
+      "thickness": {
+        "skin": 2.0,
+        "note": ">2 mm at pogonion",
+        "mentalis_depth": [
+          6.7,
+          10.6
+        ],
+        "grade": "A",
+        "source": "ClinAnat p.5, 83"
+      },
+      "plane": {
+        "default": "supraperiosteal bolus beneath mentalis, then medium superficial top-up",
+        "grade": "C",
+        "source": "ClinAnat p.164; ArtSci p.191; MinInv p.73; PSCurr p.1118"
+      },
+      "volume": {
+        "full_projection": [
+          2,
+          4
+        ],
+        "refinement_deep_per_side": [
+          0.2,
+          0.5
+        ],
+        "refinement_subcut_per_side": 0.1,
+        "note": "sources differ 10x; split over 2-3 sessions if tissue tight",
+        "grade": "B",
+        "source": "ClinAnat p.167; MinInv p.73"
+      },
+      "gprime": {
+        "band": [
+          200,
+          400
+        ],
+        "note": "hardest HA or CaHA",
+        "grade": "B",
+        "source": "MinInv p.69; ArtSci p.191"
+      },
+      "spread": {
+        "pattern": "oval pocket on periosteum",
+        "yield_prior": "high",
+        "grade": "C",
+        "source": "DermUS p.526"
+      },
+      "time_modifiers": {
+        "exaggerated_normalises_weeks": [
+          1,
+          2
+        ],
+        "final_weeks": [
+          2,
+          4
+        ],
+        "source": "MinInv p.77",
+        "grade": "B"
+      },
+      "mobility": {
+        "flag": "hyperactive mentalis migrates gel superiorly and shortens duration; toxin 2-4 U/side prolongs",
+        "source": "ClinAnat p.165-167; MinInv p.179"
+      },
+      "danger": [
+        "mental foramen",
+        "median perforating mandibular artery variant -> tongue necrosis after supraperiosteal bolus (USArticle Fig 5)"
+      ],
+      "variation": "Asian 1:1:0.8 lower face, forward-and-down; chin asymmetry perceptible only at 6 mm",
+      "landmark_idx": [
+        18,
+        83,
+        182,
+        194,
+        32,
+        140,
+        176,
+        171,
+        148,
+        152,
+        377,
+        400,
+        369,
+        262,
+        418,
+        406,
+        313
+      ],
+      "landmark_bilateral": false
+    },
+    {
+      "id": "jawline_prejowl_angle",
+      "class": [
+        "P"
+      ],
+      "boundary": "band ~1.5 cm wide parallel to inferior border from prejowl to angle (MinInv p.69); mandibular ligament at prejowl sulcus",
+      "thickness": {
+        "note": "subcut thinner than chin (ArtSci p.192)",
+        "masseter_region_to_bone": [
+          15,
+          25
+        ],
+        "masseter_thickness_ct": 14.9,
+        "masseter_sd": 2.2,
+        "grade": "A",
+        "source": "ClinAnat p.88"
+      },
+      "plane": {
+        "default": "supraperiosteal for structure; subdermal over platysma safe; prejowl deep + subcutaneous",
+        "grade": "C",
+        "source": "MinInv p.65, 69, 73"
+      },
+      "volume": {
+        "case_jawline_plus_marionette_caha": 3.0,
+        "angle_aliquot": 0.02,
+        "grade": "B",
+        "source": "PRSFund p.615; MinInv p.15"
+      },
+      "gprime": {
+        "band": ">400",
+        "grade": "B",
+        "source": "MinInv p.69"
+      },
+      "spread": {
+        "pattern": "linear on bone",
+        "yield_prior": "high over bone, low over masseter",
+        "grade": "C"
+      },
+      "time_modifiers": {
+        "swelling_normalises_weeks": [
+          1,
+          2
+        ],
+        "source": "MinInv p.77"
+      },
+      "danger": [
+        "facial a. at antegonial notch under skin+platysma only",
+        "marginal mandibular n. ~3 cm anterior to gonion, 4 cm safety; or 22-23 mm anterior / 30-31 mm above angle",
+        "parotid drift"
+      ],
+      "variation": "Asians avoid angle fill",
+      "landmark_idx": [
+        58,
+        172,
+        136,
+        150,
+        149,
+        170,
+        211,
+        210,
+        135,
+        138
+      ],
+      "landmark_bilateral": true
+    },
+    {
+      "id": "neck_preauricular",
+      "class": [],
+      "boundary": "below mandibular border; anterior to tragus",
+      "thickness": {
+        "note": "preauricular: SMAS thickest, little subcut fat (AnatFFN p.82)",
+        "grade": "C"
+      },
+      "plane": {
+        "grade": "none"
+      },
+      "volume": {
+        "earlobe_per_side": [
+          0.5,
+          1.0
+        ],
+        "grade": "B",
+        "source": "ClinAnat p.172"
+      },
+      "spread": {
+        "yield_prior": null,
+        "grade": "none"
+      },
+      "note": "measurement-only region, no response prior in any book",
+      "landmark_idx": [
+        127,
+        234,
+        93,
+        132,
+        177,
+        147,
+        123,
+        116,
+        34
+      ],
+      "landmark_bilateral": true
+    }
+  ]
+}
