@@ -34,6 +34,31 @@ Capture real faces with the iOS app (`ios-app/README.md`), pointed at the
 server's LAN address. Sessions upload in the shared
 `vectra-dupe-session/1` format (`vectra3d/io_session.py` is the contract).
 
+The local server runs one reconstruction at a time. Use one Uvicorn worker:
+its FIFO queue is in memory, and duplicate requests for an active session
+share the same job. Status moves from `queued` to `processing` to `done` or
+`failed`; `?wait=true` waits for that same queued job. Graceful shutdown drains
+the queue. After an interrupted shutdown, unfinished sessions must be submitted
+again. Separate CLI processes are not coordinated by this server queue.
+
+Object Capture keeps full detail and accepts the first result that passes the
+existing quality checks. `VECTRA_OC_ATTEMPTS` (default 5) and
+`VECTRA_OC_PHOTO_ATTEMPTS` (default 3) are maximum attempts for retrying failures.
+Successful jobs record their actual attempt count and processing duration.
+
+Object Capture display crops follow the detected face landmarks with a 25 mm
+margin, preserving the chin even when the capture origin is offset. An uncropped
+textured surface is saved as `display_uncropped.npz` for later display adjustments.
+This does not change the depth mesh's measurement crop. When no facial landmarks
+are available, the display uses a broader 160 mm head crop.
+
+To rebuild an existing capture as a **new session**, keeping the original
+processing result intact, run this while the server queue is idle:
+
+```bash
+.venv/bin/python tools/reprocess_copy.py PATIENT_ID SESSION_ID --label "Scan v2"
+```
+
 ## How it works (and what made it accurate)
 
 1. **Metric scale for free** — the iPhone TrueDepth sensor returns depth in

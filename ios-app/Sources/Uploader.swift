@@ -59,7 +59,7 @@ struct Uploader {
     /// server session id.
     func uploadSession(directory: URL, label: String, settings: AppSettings,
                        onUploadProgress: @escaping @Sendable (Double, Int64, Int64) -> Void = { _, _, _ in },
-                       onProcessing: @Sendable () async -> Void = {}) async throws -> String {
+                       onProcessing: @Sendable (String) async -> Void = { _ in }) async throws -> String {
         let pid = try await ensurePatient(settings: settings)
         let session = try await post("api/patients/\(pid)/sessions",
                                      json: ["label": label])
@@ -103,19 +103,28 @@ struct Uploader {
         // Processing now runs server-side in the background and returns at once;
         // poll the session meta until it finishes so we never hold a request open
         // across the (possibly multi-minute) reconstruction.
-        _ = try await post("api/patients/\(pid)/sessions/\(sid)/process", json: [:])
-        await onProcessing()
-        return try await pollUntilDone(pid: pid, sid: sid)
+        let meta = try await post("api/patients/\(pid)/sessions/\(sid)/process", json: [:])
+        let status = meta["status"] as? String ?? "queued"
+        await onProcessing(status)
+        return try await pollUntilDone(pid: pid, sid: sid, initialStatus: status,
+                                       onProcessing: onProcessing)
     }
 
     /// Poll the session meta every few seconds until status is done/failed.
     /// Bounded so a wedged job can't poll forever (≈12 min at 2.5 s/poll).
-    private func pollUntilDone(pid: String, sid: String) async throws -> String {
+    private func pollUntilDone(pid: String, sid: String, initialStatus: String,
+                              onProcessing: @Sendable (String) async -> Void) async throws -> String {
         let maxAttempts = 300
+        var previousStatus = initialStatus
         for _ in 0..<maxAttempts {
             try await Task.sleep(nanoseconds: 2_500_000_000)
             let meta = try await get("api/patients/\(pid)/sessions/\(sid)")
-            switch meta["status"] as? String {
+            let status = meta["status"] as? String
+            if let status, status != previousStatus {
+                await onProcessing(status)
+                previousStatus = status
+            }
+            switch status {
             case "done":
                 return sid
             case "failed":

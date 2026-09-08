@@ -6,25 +6,15 @@ struct CaptureView: View {
     @State private var modelToView: IdentifiedURL?
     @State private var askingPatientID = false
     @State private var patientIDField = ""
-    /// Operator mode: photographing someone else with the BACK camera (world
-    /// tracking + LiDAR depth on Pro devices, photo-only elsewhere). Selfie
-    /// mode is the original front-TrueDepth self-capture with the mirrored
-    /// preview people expect from a front camera.
-    @AppStorage("captureOperatorMode") private var operatorMode = false
     /// Eyes-free tone + haptic guidance during capture (default on). Toggle lives
     /// in Settings; mirrored here via the shared UserDefaults key.
     @AppStorage("soundGuidance") private var soundGuidance = true
-
-    /// Horizontal flip applied to the camera + guide layer. Selfie = mirrored
-    /// (familiar self-view); operator = un-mirrored (a real view of the subject).
-    private var previewFlipX: CGFloat { operatorMode ? 1 : -1 }
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 ARPreview(session: controller.session)
                     .ignoresSafeArea()
-                    .scaleEffect(x: previewFlipX, y: 1)
 
                 // Legibility scrims top and bottom over the live camera.
                 VStack {
@@ -44,17 +34,15 @@ struct CaptureView: View {
                     OrbitGuideOverlay(yawDeg: controller.guidance.yawDeg)
                         .allowsHitTesting(false)
                 } else if controller.phase.isActive {
-                    // Flipped with the SAME transform as the camera so the eye
-                    // markers stay registered to the mirrored video.
+                    // Rear camera and guides use the same unmirrored coordinates.
                     GuideOverlay(guidance: controller.guidance, phase: controller.phase)
-                        .scaleEffect(x: previewFlipX, y: 1)
                         .allowsHitTesting(false)
                 }
 
                 VStack(spacing: 0) {
                     HStack {
                         Spacer()
-                        modeToggle
+                        captureBadge
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, controller.phase.isActive ? 56 : 12)
@@ -72,15 +60,11 @@ struct CaptureView: View {
             }
             .onAppear {
                 controller.setViewportSize(fullScreenSize(geo))
-                controller.setMode(operatorMode ? .operatorRear : .selfieFront)
                 controller.cues.enabled = soundGuidance
                 controller.autoStart()
             }
             .onDisappear { controller.leaveCaptureTab() }
             .onChange(of: geo.size) { _, _ in controller.setViewportSize(fullScreenSize(geo)) }
-            .onChange(of: operatorMode) { _, isOperator in
-                controller.setMode(isOperator ? .operatorRear : .selfieFront)
-            }
             .onChange(of: soundGuidance) { _, on in controller.cues.enabled = on }
             .sheet(item: $modelToView) { item in
                 NavigationStack {
@@ -138,36 +122,20 @@ struct CaptureView: View {
         askingPatientID = true
     }
 
-    // MARK: - Selfie / Operator toggle
+    // MARK: - Operator capture status
 
-    /// Switches camera pipelines: Selfie = mirrored front-TrueDepth
-    /// self-capture; Operator = back camera pointed at someone else (LiDAR
-    /// depth on Pro devices, photo-only otherwise). Locked mid-capture — the
-    /// two pipelines can't be swapped without restarting the session.
-    private var modeToggle: some View {
+    private var captureBadge: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { operatorMode.toggle() }
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: operatorMode ? "person.2.fill" : "person.crop.square")
-                    Text(operatorMode ? "Operator" : "Selfie")
-                }
+            Label("Operator", systemImage: "person.2.fill")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
                 .background(.ultraThinMaterial, in: Capsule())
                 .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
-            }
-            .disabled(controller.phase.isActive)
-            .opacity(controller.phase.isActive ? 0.4 : 1)
-
-            // Rear capture quality badge: LiDAR devices get measurement-grade
-            // depth; the rest get a display-only photogrammetry scan.
-            if operatorMode {
+            if controller.captureSupported {
                 Label(controller.capturesDepth ? "LiDAR depth"
-                                               : "Photo only — no measurements",
+                                               : "Photo only · no measurements",
                       systemImage: controller.capturesDepth
                         ? "square.3.layers.3d.down.right" : "camera")
                     .font(.caption2.weight(.semibold))
@@ -187,14 +155,14 @@ struct CaptureView: View {
             VStack(spacing: 6) {
                 if let pose = controller.phase.activePose {
                     Text(pose.name.replacingOccurrences(of: "_", with: " ").uppercased() + " VIEW")
-                        .font((operatorMode ? Font.subheadline : Font.caption).weight(.bold))
+                        .font(.subheadline.weight(.bold))
                         .tracking(2)
                         .foregroundStyle(Theme.accentBright)
                 }
                 // Operator mode enlarges the live instruction so it's readable
                 // at arm's length while the phone faces the subject.
                 Text(controller.statusText)
-                    .font(operatorMode ? Font.title.weight(.bold) : Font.title3.weight(.semibold))
+                    .font(.title.weight(.bold))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -229,12 +197,6 @@ struct CaptureView: View {
                           icon: "ruler")
             CriterionChip(title: "Level", ok: controller.guidance.levelOK,
                           icon: "level")
-            // The rear camera has no blendshapes, so there is no expression
-            // gate to report in Operator mode.
-            if !operatorMode {
-                CriterionChip(title: "Neutral", ok: controller.guidance.expressionNeutral,
-                              icon: "face.smiling")
-            }
         }
     }
 
@@ -321,9 +283,7 @@ struct CaptureView: View {
                     }
                     .buttonStyle(PrimaryButtonStyle())
 
-                    Label(operatorMode
-                            ? "This device can't run rear-camera AR — demo mode renders a sample scan."
-                            : "No TrueDepth camera detected — demo mode renders a sample scan.",
+                    Label("This device can't run rear-camera AR. Demo mode renders a sample scan.",
                           systemImage: "info.circle")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.6))
@@ -565,7 +525,7 @@ private struct PoseStepper: View {
     }
 }
 
-/// Camera preview backed by ARSCNView (shows the TrueDepth video feed).
+/// Camera preview backed by ARSCNView showing the rear camera feed.
 struct ARPreview: UIViewRepresentable {
     let session: ARSession
 

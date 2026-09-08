@@ -8,8 +8,9 @@ import simd
 /// sceneDepth on Pro devices, photo-only elsewhere.
 ///
 /// There is no ARFaceAnchor on the back camera, so the head-centered frame the
-/// server expects (origin ≈ head centre, x subject-right, y up, z out of the
-/// face) is SYNTHESIZED: Vision finds the face in the image, the LiDAR depth
+/// server expects (origin ≈ head centre, y up, z out of the face toward the
+/// camera, x = y × z = the subject's own left, exactly like ARKit's face
+/// anchor) is SYNTHESIZED: Vision finds the face in the image, the LiDAR depth
 /// (or a face-size pinhole estimate) places it in ARKit's gravity-aligned
 /// world, and a head anchor is built facing the camera. The anchor keeps
 /// re-estimating while the operator lines up the FRONT pose, then freezes when
@@ -141,10 +142,13 @@ final class RearWorldTrackingBackend: CaptureBackend {
         // front-pose angle gate must instead come from Vision's head pose: the
         // subject has to actually face the lens. (Moving the phone around the
         // subject zeroes this too — the anchor re-estimates every detection —
-        // so the usual "move the phone" hints stay actionable.)
+        // so the usual "move the phone" hints stay actionable.) Pitch is NOT
+        // substituted: the anchor is built level (toCam.y = 0), so the
+        // geometric pitch is the real camera elevation even pre-freeze,
+        // whereas Vision's pitch is the subject's head tilt (they look down
+        // at a phone) and read -22° on a level camera in the 2026-07-03 set.
         if !anchorFrozen, let face = latestFace {
             yaw = face.yawDeg
-            pitch = face.pitchDeg
         }
 
         let eyes = projectedEyes(frame: frame, viewportSize: viewportSize)
@@ -217,16 +221,20 @@ final class RearWorldTrackingBackend: CaptureBackend {
         guard #available(iOS 16.0, *),
               let device = ARWorldTrackingConfiguration
                   .configurableCaptureDeviceForPrimaryCamera else { return }
-        FaceTrackingBackend.applyCameraLock(device: device, locked: locked)
+        CaptureCameraSettings.applyCameraLock(device: device, locked: locked)
     }
 
     // MARK: head anchor construction
 
     /// Build the head frame at `facePoint` (world, meters): +y = world up
     /// (gravity — the subject sits upright), +z = horizontal direction from
-    /// the head toward the camera, +x = y × z = the subject's right (camera
-    /// moving to the subject's LEFT reads a negative yaw, matching the pose
-    /// targets). Origin is pushed behind the face surface to ~the head centre.
+    /// the head toward the camera, +x = y × z = the subject's own LEFT (a
+    /// right-handed frame with y up and z toward the camera cannot be
+    /// anything else; ARKit's face anchor has the same axes). The controller's
+    /// "+yaw = subject's right" convention is produced by the sign flip in
+    /// CaptureGeometry.viewAngles, not here — keep this frame right-handed or
+    /// the server receives a mirrored head. Origin is pushed behind the face
+    /// surface to ~the head centre.
     private func headAnchorFacingCamera(facePoint: SIMD3<Float>,
                                         frame: ARFrame) -> simd_float4x4? {
         let c = frame.camera.transform.columns.3
@@ -314,10 +322,15 @@ final class RearWorldTrackingBackend: CaptureBackend {
                     found = VisionFace(
                         centerNative: center,
                         widthFracUpright: bb.width,
-                        // Sign convention only steers the left/right hint text;
-                        // the front gate is symmetric. Flip here if the hints
-                        // point the wrong way on device.
-                        yawDeg: -Float(truncating: obs.yaw ?? 0) * 180 / .pi,
+                        // Vision's yaw is positive when the camera sits toward
+                        // the subject's RIGHT (measured on the 2026-07-03
+                        // frames under .right: camera at head -x, i.e. the
+                        // subject's right, read +25°/+72°; at head +x, -37°).
+                        // That is the controller's convention (+yaw = camera
+                        // toward the subject's right, see viewAngles), so no
+                        // flip. Only steers the pre-freeze hint text; the
+                        // front gate itself is symmetric.
+                        yawDeg: Float(truncating: obs.yaw ?? 0) * 180 / .pi,
                         pitchDeg: Float(truncating: obs.pitch ?? 0) * 180 / .pi,
                         eyesNative: eyes,
                         timestamp: timestamp)

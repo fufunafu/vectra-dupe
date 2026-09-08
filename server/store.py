@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import uuid
 from datetime import datetime, timezone
 
@@ -64,9 +65,21 @@ def create_session(pid: str, label: str) -> dict:
     os.makedirs(os.path.join(sdir, "raw"), exist_ok=True)
     meta = {"id": sid, "label": label, "created_at": _now(),
             "processed": False, "status": "new"}
-    with open(os.path.join(sdir, "meta.json"), "w") as f:
-        json.dump(meta, f, indent=2)
+    _write_meta(sdir, meta)
     return meta
+
+
+def _write_meta(sdir: str, meta: dict) -> None:
+    """Publish a complete status snapshot while clients poll queued jobs."""
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=sdir, delete=False) as f:
+            path = f.name
+            json.dump(meta, f, indent=2)
+        os.replace(path, os.path.join(sdir, "meta.json"))
+    finally:
+        if path is not None and os.path.exists(path):
+            os.unlink(path)
 
 
 def session_dir(pid: str, sid: str) -> str:
@@ -87,8 +100,7 @@ def update_session_meta(pid: str, sid: str, **updates) -> dict:
     with open(os.path.join(sdir, "meta.json")) as f:
         meta = json.load(f)
     meta.update(updates)
-    with open(os.path.join(sdir, "meta.json"), "w") as f:
-        json.dump(meta, f, indent=2)
+    _write_meta(sdir, meta)
     return meta
 
 

@@ -119,16 +119,8 @@
        background: linear-gradient(to top, #2166ac, #f7f7f7, #b2182b); }
   #legend-title { position: absolute; right: 18px; bottom: 214px; font-size: 10px;
        letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-  /* Smooth / Textured display toggle (instant; no reprocessing) */
-  #view-toggle { position: absolute; right: 18px; top: 16px; display: flex; gap: 0;
-       background: #0d1117aa; border: 1px solid var(--hairline); border-radius: 9px;
-       overflow: hidden; backdrop-filter: blur(6px); }
-  #view-toggle button { border: none; background: transparent; color: var(--muted);
-       font-size: 12px; font-weight: 600; padding: 7px 13px; cursor: pointer; }
-  #view-toggle button + button { border-left: 1px solid var(--hairline); }
-  #view-toggle button.active { background: var(--accent); color: #03201d; }
 
-  /* Reprocess / process progress overlay (time-based; OC runs ~2–3 min) */
+  /* Indeterminate processing indicator with elapsed time. */
   #progress-overlay { position: absolute; inset: 0; display: none;
        align-items: center; justify-content: center; z-index: 20;
        background: #0b0f14cc; backdrop-filter: blur(4px); }
@@ -138,9 +130,12 @@
   #progress-label { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
   #progress-track { height: 8px; border-radius: 6px; background: var(--surface-2);
        overflow: hidden; margin: 14px 0 9px; }
-  #progress-bar { height: 100%; width: 0%; border-radius: 6px;
+  #progress-bar { height: 100%; width: 35%; border-radius: 6px;
        background: linear-gradient(90deg, var(--accent), var(--accent-br));
-       transition: width .25s ease-out; }
+       animation: processing-pulse 1.4s ease-in-out infinite alternate; }
+  @keyframes processing-pulse { from { transform: translateX(0); }
+       to { transform: translateX(185%); } }
+  @media (prefers-reduced-motion: reduce) { #progress-bar { animation: none; } }
   #progress-meta { display: flex; justify-content: space-between;
        font-size: 11.5px; color: var(--muted); }
 </style>
@@ -188,17 +183,12 @@
 <div id="viewport">
   <div id="canvas-host"></div>
   <div id="status">no mesh loaded</div>
-  <div id="view-toggle" title="Switch display — no reprocessing">
-    <button data-mode="smooth">Smooth</button>
-    <button data-mode="textured">Textured</button>
-  </div>
   <div id="progress-overlay">
     <div id="progress-card">
       <div id="progress-label">Reconstructing…</div>
       <div id="progress-track"><div id="progress-bar"></div></div>
       <div id="progress-meta">
-        <span id="progress-elapsed">0:00 elapsed · ~2–3 min</span>
-        <span id="progress-pct">0%</span>
+        <span id="progress-elapsed">0:00 elapsed</span>
       </div>
     </div>
   </div>
@@ -228,32 +218,24 @@ const api = (path, opts) => fetch(path, opts).then(async r => {
 const el = id => document.getElementById(id);
 const status = msg => { el('status').textContent = msg; };
 
-// Time-based progress overlay for the long (~2–3 min) reconstruction. The server
-// call is synchronous (?wait=true) and reports no percentage, so we ease an
-// animated bar toward ~95% over `expectedMs`, holding there until the request
-// resolves, then snap to 100%. Returns a finish() to call in a finally block.
+// The request includes queue time. Show elapsed time without estimating progress.
 let _progTimer = null;
-function startProgress(label = 'Reconstructing…', expectedMs = 150000) {
-  const bar = el('progress-bar'), pct = el('progress-pct'), elapsed = el('progress-elapsed');
+function startProgress(label = 'Waiting for server…') {
+  const elapsed = el('progress-elapsed');
   el('progress-label').textContent = label;
   el('progress-overlay').style.display = 'flex';
-  bar.style.width = '0%'; pct.textContent = '0%';
   const t0 = performance.now();
   if (_progTimer) clearInterval(_progTimer);
   const tick = () => {
     const ms = performance.now() - t0;
-    const frac = 0.95 * (1 - Math.exp(-ms / expectedMs));   // asymptote at 95%
-    bar.style.width = (frac * 100).toFixed(1) + '%';
-    pct.textContent = Math.round(frac * 100) + '%';
     const s = Math.floor(ms / 1000);
-    elapsed.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} elapsed · ~2–3 min`;
+    elapsed.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} elapsed`;
   };
   tick();
   _progTimer = setInterval(tick, 200);
   return () => {
     if (_progTimer) { clearInterval(_progTimer); _progTimer = null; }
-    bar.style.width = '100%'; pct.textContent = '100%';
-    setTimeout(() => { el('progress-overlay').style.display = 'none'; bar.style.width = '0%'; }, 400);
+    el('progress-overlay').style.display = 'none';
   };
 }
 
@@ -336,11 +318,12 @@ function clearMesh() {
   meshObj = null;
 }
 
-// Prefer the textured GLB (full-resolution UV atlas); fall back to the
-// per-vertex-coloured PLY if it isn't there (older sessions / texture failed).
-// Display representation, toggled in the viewport (no reprocessing — both GLBs
-// are written once by the server and swapped here instantly).
-let displayMode = localStorage.getItem('displayMode') || 'smooth';  // 'smooth' | 'textured'
+// Display model: always the textured GLB (Object Capture geometry with its
+// full-resolution photo atlas). mesh.glb carries the SAME geometry with one
+// colour per vertex — texture detail capped by vertex density, so it reads as
+// blotchy — and exists only as a fallback for sessions whose texture bake
+// failed; mesh.ply (the measurement mesh) is the last resort. The old
+// Smooth/Textured toggle was removed 2026-09-08: textured is the product.
 let currentBase = null, currentLabel = null;
 
 function loadModel(baseUrl, label) {
@@ -349,32 +332,9 @@ function loadModel(baseUrl, label) {
   // so without a changing query string a refresh re-loads the STALE cached mesh
   // (old texture/geometry) and the user never sees the new result.
   const bust = '?t=' + Date.now();
-  // Textured tries mesh_textured.glb then falls back to the smooth glb (old
-  // sessions have no textured glb); both fall back to mesh.ply.
-  const glbs = (displayMode === 'textured'
-    ? ['/mesh_textured.glb', '/mesh.glb'] : ['/mesh.glb'])
-    .map(p => baseUrl + p + bust);
+  const glbs = ['/mesh_textured.glb', '/mesh.glb'].map(p => baseUrl + p + bust);
   loadGlb(glbs, baseUrl + '/mesh.ply' + bust, label);
 }
-
-// Reload whatever model is showing in the current displayMode (after a toggle).
-function reloadCurrent() {
-  if (currentBase) loadModel(currentBase, currentLabel);
-}
-
-// Smooth / Textured toggle: swaps the on-disk GLB instantly (no reprocessing).
-(function setupViewToggle() {
-  const tog = el('view-toggle');
-  const sync = () => tog.querySelectorAll('button').forEach(
-    b => b.classList.toggle('active', b.dataset.mode === displayMode));
-  tog.querySelectorAll('button').forEach(b => b.onclick = () => {
-    if (displayMode === b.dataset.mode) return;
-    displayMode = b.dataset.mode;
-    localStorage.setItem('displayMode', displayMode);
-    sync(); reloadCurrent();
-  });
-  sync();
-})();
 
 function loadGlb(urls, fallbackUrl, label) {
   status('loading ' + label + ' …');
@@ -488,7 +448,7 @@ async function refreshSessions() {
       const b = document.createElement('button');
       b.className = 'primary'; b.textContent = 'Process';
       b.onclick = async e => { e.stopPropagation(); b.disabled = true; b.textContent = 'processing…';
-        const done = startProgress('Reconstructing…');
+        const done = startProgress();
         try { await api(`/api/patients/${patientId}/sessions/${s.id}/process?wait=true`, { method: 'POST' });
               await refreshSessions(); }
         catch (err) { alert(err.message); b.disabled = false; b.textContent = 'Process'; }
@@ -502,15 +462,14 @@ async function refreshSessions() {
         refreshSessions(); };
       actions.appendChild(v);
       // Re-run the pipeline on the already-uploaded raw data (e.g. after a
-      // pipeline change) without re-capturing. This builds BOTH display variants
-      // (smooth per-vertex + cylindrical photo texture) in one pass; switch
-      // between them instantly with the Smooth/Textured toggle in the viewer — no
-      // reprocessing needed. Measurement (mesh.ply) is identical for both.
+      // pipeline change) without re-capturing. Rebuilds the textured display
+      // GLB (and its vertex-colour fallback); measurement (mesh.ply) is
+      // recomputed from the same raw depth.
       const rp = document.createElement('button');
       rp.textContent = 'Reprocess';
       rp.onclick = async e => { e.stopPropagation(); rp.disabled = true;
         const prev = rp.textContent; rp.textContent = 'reprocessing…';
-        const done = startProgress('Reprocessing…');
+        const done = startProgress();
         try {
           await api(`/api/patients/${patientId}/sessions/${s.id}/process?wait=true`, { method: 'POST' });
           await refreshSessions();

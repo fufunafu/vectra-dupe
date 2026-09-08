@@ -6,16 +6,29 @@ Run:  ../.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8008
 
 import json
 import os
+import time
+from contextlib import asynccontextmanager
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import processing
 import store
+from jobs import ProcessingQueue
 
-app = FastAPI(title="vectra-dupe")
+
+@asynccontextmanager
+async def lifespan(app):
+    app.state.processing_queue = ProcessingQueue()
+    try:
+        yield
+    finally:
+        app.state.processing_queue.shutdown()
+
+
+app = FastAPI(title="vectra-dupe", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -101,19 +114,24 @@ def _process_core(pid: str, sid: str, raw_dir: str, sdir: str, mode: str) -> dic
         patient_id=stats.get("patient_id", ""), error=None)
 
 
-def _run_processing(pid: str, sid: str, raw_dir: str, sdir: str, mode: str) -> None:
-    """Background wrapper: persist failures into the meta instead of raising."""
+def _run_processing(pid: str, sid: str, raw_dir: str, sdir: str, mode: str) -> dict:
+    """Run one queued job, persisting its status, duration, and any failure."""
+    started = time.monotonic()
     try:
+        store.update_session_meta(pid, sid, status="processing", error=None)
         _process_core(pid, sid, raw_dir, sdir, mode)
-    except Exception as e:  # pragma: no cover - exercised via the live API
-        store.update_session_meta(pid, sid, status="failed", error=str(e))
+    except Exception as e:
+        return store.update_session_meta(
+            pid, sid, status="failed", error=str(e),
+            processing_seconds=round(time.monotonic() - started, 2))
+    return store.update_session_meta(
+        pid, sid, processing_seconds=round(time.monotonic() - started, 2))
 
 
 @app.post("/api/patients/{pid}/sessions/{sid}/process")
-def process_session(pid: str, sid: str, background_tasks: BackgroundTasks,
-                    mode: str = "both", wait: bool = False):
+def process_session(pid: str, sid: str, mode: str = "both", wait: bool = False):
     """Kick off processing. By default it runs in the background and returns
-    immediately with status="processing" — clients poll GET .../sessions/{sid}
+    immediately with status="queued" or "processing"; clients poll the session
     until status is "done"/"failed" (a dense capture's projection can take
     minutes, longer than any sane HTTP timeout). Pass ?wait=true to block and
     return the finished meta (used by the e2e test)."""
@@ -126,14 +144,16 @@ def process_session(pid: str, sid: str, background_tasks: BackgroundTasks,
     raw_dir = os.path.join(sdir, "raw")
     if not os.path.exists(os.path.join(raw_dir, "session.json")):
         raise HTTPException(400, "session.json not uploaded yet")
-    store.update_session_meta(pid, sid, status="processing", error=None)
+    future = app.state.processing_queue.submit(
+        (pid, sid),
+        lambda: _run_processing(pid, sid, raw_dir, sdir, mode),
+        on_queued=lambda: store.update_session_meta(
+            pid, sid, status="queued", error=None, processing_seconds=None))
     if wait:
-        try:
-            return _process_core(pid, sid, raw_dir, sdir, mode)
-        except Exception as e:  # surface pipeline errors to the caller
-            store.update_session_meta(pid, sid, status="failed", error=str(e))
-            raise HTTPException(500, f"processing failed: {e}")
-    background_tasks.add_task(_run_processing, pid, sid, raw_dir, sdir, mode)
+        result = future.result()
+        if result["status"] == "failed":
+            raise HTTPException(500, f"processing failed: {result['error']}")
+        return result
     return store.get_session_meta(pid, sid)
 
 

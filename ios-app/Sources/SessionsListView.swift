@@ -65,7 +65,7 @@ struct SessionsListView: View {
             Text("No captures yet")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
-            Text("Head to the Capture tab and record a 3-view\nscan. It will appear here, ready to upload.")
+            Text("Head to the Capture tab and record a scan.\nIt will appear here, ready to upload.")
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.6))
@@ -107,8 +107,9 @@ struct SessionsListView: View {
                             uploadState[name] = .uploading(fraction: frac, sent: sent, total: total)
                         }
                     },
-                    onProcessing: { await MainActor.run {
-                        uploadState[name] = .processing(startedAt: Date())
+                    onProcessing: { status in await MainActor.run {
+                        uploadState[name] = status == "queued"
+                            ? .queued(startedAt: Date()) : .processing(startedAt: Date())
                     } })
                 await MainActor.run { uploadState[name] = .processed(sid) }
             } catch {
@@ -123,6 +124,7 @@ struct SessionsListView: View {
 enum UploadStatus {
     case onDevice
     case uploading(fraction: Double, sent: Int64, total: Int64)
+    case queued(startedAt: Date)
     case processing(startedAt: Date)
     case processed(String)
     case failed(String)
@@ -131,6 +133,7 @@ enum UploadStatus {
         switch self {
         case .onDevice:        return ("On device", .white.opacity(0.55))
         case .uploading:       return ("Uploading…", Theme.warn)
+        case .queued:         return ("Queued", Theme.warn)
         case .processing:      return ("Processing…", Theme.warn)
         case .processed:       return ("Processed", Theme.success)
         case .failed:          return ("Failed", Theme.danger)
@@ -139,7 +142,8 @@ enum UploadStatus {
 
     var detail: String? {
         switch self {
-        case .processing:         return "Reconstructing on the server — this can take a few minutes. Keep the app open."
+        case .queued:             return "Waiting for another scan to finish. Keep the app open to follow progress."
+        case .processing:         return "Reconstructing on the server. Keep the app open to follow progress."
         case let .processed(sid): return "Server session \(sid)"
         case let .failed(msg):    return msg
         default:                  return nil
@@ -149,7 +153,7 @@ enum UploadStatus {
     /// Upload button is disabled while either uploading or processing.
     var isBusy: Bool {
         switch self {
-        case .uploading, .processing: return true
+        case .uploading, .queued, .processing: return true
         default:                      return false
         }
     }
@@ -179,7 +183,7 @@ private struct SessionCard: View {
                         Text(Self.prettyDate(dir.lastPathComponent))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text("3-view TrueDepth scan")
+                        Text("3D face scan")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.5))
                     }
@@ -262,16 +266,9 @@ private struct SessionCard: View {
     }
 }
 
-/// Progress bar for the two long phases of an upload:
-///  • uploading — a real byte-% bar (dense captures are tens of MB).
-///  • processing — a time-based bar that eases toward ~95% over the typical
-///    ~2.5 min reconstruction (the server poll reports no percentage), with a
-///    live elapsed counter.
+/// Byte progress for uploads; an activity indicator and elapsed time for jobs.
 private struct UploadProgressBlock: View {
     let status: UploadStatus
-
-    // Typical OC reconstruction wall-clock; the bar approaches 95% asymptotically.
-    private static let expectedProcessing: TimeInterval = 150
 
     var body: some View {
         switch status {
@@ -285,19 +282,14 @@ private struct UploadProgressBlock: View {
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.5))
             }
-        case let .processing(startedAt):
+        case let .queued(startedAt), let .processing(startedAt):
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let elapsed = max(0, context.date.timeIntervalSince(startedAt))
-                let frac = 0.95 * (1 - exp(-elapsed / Self.expectedProcessing))
-                VStack(alignment: .leading, spacing: 5) {
-                    ProgressView(value: min(frac, 0.99)).tint(Theme.accent)
-                    HStack {
-                        Text("\(Self.clock(elapsed)) elapsed · ~2–3 min")
-                        Spacer()
-                        Text("\(Int(frac * 100))%")
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.5))
+                HStack(spacing: 10) {
+                    ProgressView().tint(Theme.accent)
+                    Text("\(Self.clock(elapsed)) elapsed")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.5))
                 }
             }
         default:
@@ -391,9 +383,9 @@ struct SettingsView: View {
                         .foregroundStyle(.white)
                 }
                 .tint(Theme.accent)
-                Text("Tones and vibration guide you when you can't see the screen — "
+                Text("Tones and vibration guide you while you frame the subject. "
                      + "pitch tells you which way to move, faster beeps mean you're "
-                     + "closer, and a chime + buzz confirm each shot. Ideal for selfie capture.")
+                     + "closer, and a chime + buzz confirm each shot.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.5))
             }
@@ -459,8 +451,9 @@ struct SettingsView: View {
     }
 
     private let tips = [
-        "Hold the phone at arm's length, eyes level with the guide line.",
-        "Keep a relaxed, neutral expression — no smiling or brow raise.",
+        "Point the rear camera at the subject, with their eyes level with the guide line.",
+        "Ask the subject to hold still with a relaxed, neutral expression.",
+        "Move the phone around the subject while they keep their head still.",
         "Each pose captures automatically once the line turns green.",
         "Use a hair net or headband; loose hair ruins the reconstruction.",
     ]

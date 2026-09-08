@@ -35,13 +35,13 @@ struct ColorFrameCapture {
     let worldToCamera: simd_double4x4   // face-frame -> CV camera frame, mm
 }
 
-/// Guidance + capture state machine around an ARSession. The camera-specific
-/// half (front TrueDepth face tracking vs rear world tracking + LiDAR) lives
-/// behind `CaptureBackend`; this class owns the shared pose sequence, gates,
-/// burst averaging, orbit harvest, and session writing. "World" for the saved
-/// session is the head-centered frame at each capture (x subject-right, y up,
-/// z out of the face) — the face anchor on the front camera, a Vision-placed
-/// head anchor on the rear.
+/// Operator capture state machine around a rear-camera ARSession. The backend
+/// handles world tracking, Vision face detection, and available LiDAR depth.
+/// This class owns the pose sequence, gates, burst averaging, orbit harvest,
+/// and session writing. Saved geometry uses the synthesized head frame:
+/// y up, z out of the face toward the camera, x = subject's own LEFT (same
+/// axes as ARKit's face anchor; see CaptureGeometry.viewAngles for why the
+/// yaw the state machine sees is nevertheless "+ = subject's right").
 final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     enum Pose: Int, CaseIterable {
         // Nine depth keyframes covering wider arcs than the original five:
@@ -90,10 +90,10 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         }
         var instruction: String {
             switch self {
-            case .front: return "Look straight ahead and hold still"
-            case .leftHalf: return "Hold still — move the phone to their LEFT"
+            case .front: return "Ask the subject to face the camera and hold still"
+            case .leftHalf: return "Move the phone to their LEFT"
             case .left: return "Keep going LEFT for a side profile"
-            case .rightHalf: return "Hold still — move the phone to their RIGHT"
+            case .rightHalf: return "Move the phone to their RIGHT"
             case .right: return "Keep going RIGHT for a side profile"
             case .brow: return "Raise the phone above their eye line"
             case .jaw: return "Lower the phone below their chin"
@@ -132,54 +132,19 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// the Settings toggle by the view.
     let cues = CaptureCues()
 
-    /// Which camera pipeline runs: Selfie = front TrueDepth (the operator IS
-    /// the subject, cues read "your left/right"); Operator = rear camera
-    /// filming someone else ("their …"). Set by the view from the toggle.
-    @Published private(set) var mode: CaptureMode = .selfieFront
-    /// Camera-specific half of the capture (nil until a preview starts, or on
-    /// devices that can't run the selected mode).
+    /// Rear-camera capture of another person, initialized when preview starts.
     private var backend: CaptureBackend?
 
-    /// Switch camera pipelines. Ignored mid-capture (the view disables the
-    /// toggle then); restarts the live preview so the new camera shows.
-    func setMode(_ newMode: CaptureMode) {
-        guard newMode != mode else { return }
-        switch phase {
-        case .idle, .preview, .done: break
-        default: return
-        }
-        mode = newMode
-        guard !isDemo else { return }
-        if captureSupported {
-            startPreview()
-        } else {
-            session.pause()
-            phase = .idle
-            statusText = unsupportedMessage
-        }
-    }
-
-    /// Whether the current mode can run on this device (Selfie needs TrueDepth,
-    /// Operator needs rear world tracking). Demo mode covers the rest.
-    var captureSupported: Bool { mode.isSupported }
+    /// Operator capture requires rear world tracking. Demo covers other devices.
+    var captureSupported: Bool { RearWorldTrackingBackend.isSupported }
     /// False only for rear capture on a device without LiDAR: the session will
     /// be photo-only (display mesh, no measurement geometry).
     var capturesDepth: Bool {
-        mode == .selfieFront || ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
+        RearWorldTrackingBackend.hasLiDAR
     }
 
     private var unsupportedMessage: String {
-        mode == .selfieFront
-            ? "No TrueDepth camera — tap “Run demo” instead"
-            : "This device can't run rear-camera AR — tap “Run demo” instead"
-    }
-
-    /// Adapt operator-voiced copy ("their …") to the subject when in Selfie mode.
-    private func phrasing(_ text: String) -> String {
-        mode == .selfieFront
-            ? text.replacingOccurrences(of: "their", with: "your",
-                                        options: .caseInsensitive)
-            : text
+        "This device can't run rear-camera AR. Tap “Run demo” instead"
     }
 
     struct GuidanceState {
@@ -321,11 +286,12 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// or auto-shutter. The operator frames the subject, then taps Start (which
     /// asks for a patient ID and calls `beginGuidedCapture`).
     func startPreview() {
-        guard let newBackend = mode.makeBackend() else {
+        guard captureSupported else {
             backend = nil
             statusText = unsupportedMessage
             return
         }
+        let newBackend = RearWorldTrackingBackend()
         backend = newBackend
         stopDemo()
         isDemo = false
@@ -344,7 +310,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         statusText = "Frame the subject, then tap Start"
     }
 
-    /// Begin the guided 5-pose capture for the given patient. Called after the
+    /// Begin the guided nine-pose capture for the given patient. Called after the
     /// operator taps Start and enters a patient ID. Reuses the already-running
     /// preview session.
     func beginGuidedCapture(patientId: String) {
@@ -361,7 +327,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         finishedSession = nil
         if session.delegate == nil { startPreview() }   // safety: ensure camera is live
         phase = .aligning(pose: .front)
-        statusText = phrasing(Pose.front.instruction)
+        statusText = Pose.front.instruction
     }
 
     func cancel() {
@@ -413,8 +379,8 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: - Demo mode (no camera)
 
-    /// Runs the full guided-capture experience without a TrueDepth sensor:
-    /// scripts the alignment/hold/capture animation through the three poses,
+    /// Runs the guided-capture experience without a camera:
+    /// scripts the alignment/hold/capture animation through the nine poses,
     /// then writes a synthetic head session so the result shows up — and can
     /// be uploaded — just like a real capture. Lets the app be explored on the
     /// Simulator or any device without a front depth camera.
@@ -427,7 +393,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         finishedSession = nil
         guidance = GuidanceState()
         phase = .aligning(pose: .front)
-        statusText = phrasing(Pose.front.instruction)
+        statusText = Pose.front.instruction
         demoStart = Date()
         demoTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0,
                                          repeats: true) { [weak self] _ in
@@ -467,7 +433,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
                 hasFace: t > 0.15, angleOK: true, aligned: false,
                 expressionNeutral: true)
             phase = .aligning(pose: pose)
-            statusText = phrasing(pose.instruction)
+            statusText = pose.instruction
         } else if local < search + holdSeconds {
             guidance = alignedGuidance(pose: pose, midX: midX, eyeY: eyeY, sep: sep)
             phase = .holding(pose: pose, progress: (local - search) / holdSeconds)
@@ -623,10 +589,10 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
                 alignedSince = nil
                 DispatchQueue.main.async {
                     if case .holding = self.phase { self.phase = .aligning(pose: pose) }
-                    self.statusText = self.phrasing(self.alignmentHint(
+                    self.statusText = self.alignmentHint(
                         pose: pose, yaw: yaw, pitch: pitch, roll: roll,
                         distMM: distMM, neutral: neutral, still: still,
-                        subjectDriftMM: sample.subjectDriftMM))
+                        subjectDriftMM: sample.subjectDriftMM)
                 }
             }
         }
@@ -639,6 +605,18 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     /// a main.sync would deadlock.
     private func phaseForProcessing() -> Phase { phase }
 
+    /// Phase transitions must land BEFORE the next ARFrame is handled. A
+    /// `DispatchQueue.main.async` from inside a main-queue delegate callback
+    /// runs only after every frame block ALREADY queued behind this one, and
+    /// on LiDAR devices the per-frame depth conversion + JPEG encode backs the
+    /// main queue up by several frames. Field capture 2026-09-08: eight
+    /// backlogged frames refilled the just-emptied burst while the phase was
+    /// still `.capturing(front)`, so "front" was captured and appended twice.
+    /// Run inline when already on main; fall back to async otherwise.
+    private func onMain(_ work: @escaping () -> Void) {
+        if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
+    }
+
     private func beginBurst(pose: Pose) {
         alignedSince = nil
         lastAlignedAt = nil
@@ -648,7 +626,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         burstRGBCount = 0
         burstColorMotion = .greatestFiniteMagnitude
         captureStart = Date()
-        DispatchQueue.main.async {
+        onMain {
             self.phase = .capturing(pose: pose)
             self.statusText = "Capturing…"
         }
@@ -730,6 +708,10 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         for i in 0..<avg.count {
             avg[i] = counts[i] >= minCount ? avg[i] / counts[i] : 0
         }
+        // A pose is captured at most once: if a stale frame re-finished this
+        // burst (see onMain) or a pose was redone, the newer keyframe replaces
+        // the older one instead of the server integrating the same depth twice.
+        captured.removeAll { $0.name == pose.name }
         captured.append(CapturedPose(
             name: pose.name, depthMM: avg, width: geo.w, height: geo.h,
             fx: geo.fx, fy: geo.fy, cx: geo.cx, cy: geo.cy,
@@ -774,10 +756,10 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     private func advanceFromCapturedPose(_ pose: Pose) {
         if pose == .front { backend?.didCaptureFrontPose() }
         cues.captured()
-        DispatchQueue.main.async {
+        onMain {
             if let next = Pose(rawValue: pose.rawValue + 1) {
                 self.phase = .aligning(pose: next)
-                self.statusText = self.phrasing(next.instruction)
+                self.statusText = next.instruction
             } else {
                 self.beginOrbit()
             }
@@ -807,8 +789,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         phase = .orbiting
         cues.stop()   // end the hold/hunt cues; orbit uses per-frame ticks
         backend?.setCameraLocked(true)
-        statusText = phrasing(
-            "Last step: slowly sweep the phone around their face — it captures as you move")
+        statusText = "Last step: slowly sweep the phone around their face. It captures as you move"
     }
 
     /// Called from the UI when the operator taps Done during the orbit phase.
@@ -995,7 +976,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
                 poses: captured,
                 colorFrames: stationFrames + orbitColorFrames + stillFrames,
                 patientId: patientId,
-                device: backend?.deviceTag ?? "iphone-truedepth",
+                device: backend?.deviceTag ?? "iphone-rear-photo",
                 photoOnly: backend.map { !$0.providesDepth } ?? false)
             finishedSession = url
             statusText = "Captured ✓ — ready to upload from Sessions tab"

@@ -75,9 +75,9 @@ HEAD_HEIGHT_MIN_MM, HEAD_HEIGHT_MAX_MM = 140.0, 340.0
 
 # PhotogrammetrySession is non-deterministic: a fresh reconstruction varies, and
 # its landmark alignment rms swings run-to-run (observed 2.7–8.3 mm), so a single
-# attempt occasionally trips a guard and drops to the TSDF display. We run a few
-# attempts and keep the lowest-rms one that passes every guard. Overridable via
-# VECTRA_OC_ATTEMPTS. Each attempt re-runs ocrecon (~20 s at full detail).
+# attempt occasionally trips a guard and drops to the TSDF display. Retry failed
+# attempts, stopping at the first result that passes every guard. These settings
+# cap the attempts; they do not force successful reconstructions to run again.
 OC_ATTEMPTS = max(1, int(os.environ.get("VECTRA_OC_ATTEMPTS", "5")))
 
 # Photo-only sessions (rear camera, no LiDAR): metric alignment fits OC's
@@ -97,6 +97,9 @@ class OCResult:
     mesh: o3d.geometry.TriangleMesh                     # per-vertex colour (measurement + mesh.glb)
     textured: "o3d.t.geometry.TriangleMesh | None"      # UV atlas + albedo (mesh_textured.glb)
     stats: dict = field(default_factory=dict)
+    # Valid facial surface landmarks in the same metric frame as the mesh.
+    # Used only to choose a display crop that includes the entire detected face.
+    face_landmarks: np.ndarray | None = None
 
 
 def tool_available() -> bool:
@@ -457,12 +460,12 @@ def reconstruct_metric(raw_dir: str, poses: list[PoseCapture],
                        color_frames: list[ColorFrame], out_dir: str,
                        attempts: int = OC_ATTEMPTS,
                        extrinsics: "list[np.ndarray] | None" = None) -> OCResult:
-    """Reconstruct via Object Capture, best of `attempts` runs.
+    """Retry failed reconstructions up to `attempts`, accepting the first pass.
 
-    Each attempt is a full fresh reconstruction+alignment (PhotogrammetrySession
-    is non-deterministic). We keep the lowest-rms result that clears every metric
-    guard; if none do, we re-raise the last failure so the caller falls back to
-    TSDF. `stats` gains `oc_attempts` (run) and `oc_attempts_passed`."""
+    All existing alignment and scale guards run before a result is accepted.
+    If all attempts fail, the caller can fall back to TSDF. Stats report the
+    actual number of attempts, including rejected runs.
+    """
     best: OCResult | None = None
     attempt_log: list[dict] = []
     n_passed = 0
@@ -483,11 +486,12 @@ def reconstruct_metric(raw_dir: str, poses: list[PoseCapture],
             best = res
         print(f"[photogrammetry] attempt {i + 1}/{attempts} ok: "
               f"rms={res.stats['align_rms_mm']}mm ipd={res.stats['align_ipd_mm']}mm")
+        break
     if best is None:
         detail = "; ".join(f"#{d['attempt']}: {d.get('error', '?')}"
                            for d in attempt_log)
         raise RuntimeError(f"all {attempts} Object Capture attempts failed — {detail}")
-    best.stats["oc_attempts"] = attempts
+    best.stats["oc_attempts"] = len(attempt_log)
     best.stats["oc_attempts_passed"] = n_passed
     best.stats["oc_attempt_log"] = attempt_log
     return best
@@ -582,7 +586,8 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
             "align_ipd_mm": round(ipd, 2),
             "align_method": "landmark_umeyama",
         }
-        return OCResult(mesh=mesh, textured=textured, stats=stats)
+        return OCResult(mesh=mesh, textured=textured, stats=stats,
+                        face_landmarks=worldL[ocOK])
     finally:
         if debug:
             dbg = os.path.join(out_dir, "oc_debug")
@@ -613,7 +618,7 @@ def reconstruct_photo_only(raw_dir: str, color_frames: list[ColorFrame],
                            out_dir: str,
                            attempts: int = PHOTO_OC_ATTEMPTS) -> OCResult:
     """Display-only reconstruction for sessions with NO depth poses (rear
-    camera without LiDAR). Same best-of-N attempt loop as reconstruct_metric,
+    camera without LiDAR). Same retry-on-failure loop as reconstruct_metric,
     but metric alignment comes from OC-vs-ARKit camera poses instead of
     depth-unprojected landmarks."""
     best: OCResult | None = None
@@ -636,12 +641,13 @@ def reconstruct_photo_only(raw_dir: str, color_frames: list[ColorFrame],
             best = res
         print(f"[photogrammetry] photo-only attempt {i + 1}/{attempts} ok: "
               f"rms={res.stats['align_rms_mm']}mm")
+        break
     if best is None:
         detail = "; ".join(f"#{d['attempt']}: {d.get('error', '?')}"
                            for d in attempt_log)
         raise RuntimeError(
             f"all {attempts} photo-only Object Capture attempts failed — {detail}")
-    best.stats["oc_attempts"] = attempts
+    best.stats["oc_attempts"] = len(attempt_log)
     best.stats["oc_attempts_passed"] = n_passed
     best.stats["oc_attempt_log"] = attempt_log
     return best

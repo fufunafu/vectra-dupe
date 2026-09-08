@@ -23,12 +23,11 @@ from vectra3d import analyze, compare, fuse, io_session, photogrammetry  # noqa:
 # mesh (mesh.ply); generous so nothing measurable is clipped.
 HEAD_RADIUS_MM = 135.0
 
-# Tighter crop for the Object Capture DISPLAY meshes (mesh.glb / mesh_textured.glb).
-# OC reconstructs the full hair/neck periphery, which it renders as a gray,
-# low-texture blob halo with a ragged outline. A face-focused sphere trims that
-# halo and gives a clean boundary. Display-only — never applied to mesh.ply.
-# Overridable via VECTRA_DISPLAY_CROP_MM while tuning visually.
-DISPLAY_CROP_RADIUS_MM = float(os.environ.get("VECTRA_DISPLAY_CROP_MM", "110.0"))
+# Display crops follow facial landmarks rather than assuming the head origin
+# is centered in the visible face. Without landmarks, preserve a broader head
+# region. The environment override is a minimum radius, never a face cutoff.
+DISPLAY_CROP_RADIUS_MM = float(os.environ.get("VECTRA_DISPLAY_CROP_MM", "160.0"))
+DISPLAY_FACE_MARGIN_MM = 25.0
 
 # Extra Taubin iterations applied to the VIEWER meshes only (mesh.glb /
 # mesh_textured.glb), on top of the fusion-mesh smoothing. The measurement mesh
@@ -98,7 +97,8 @@ def keep_main_components(mesh: o3d.geometry.TriangleMesh,
 
 def normalize_to_front_frame(mesh: o3d.geometry.TriangleMesh,
                              front_world_to_cam: np.ndarray,
-                             radius_mm: float = HEAD_RADIUS_MM
+                             radius_mm: float = HEAD_RADIUS_MM,
+                             crop_center: np.ndarray | None = None,
                              ) -> tuple[o3d.geometry.TriangleMesh, np.ndarray]:
     """Returns the normalized+cropped mesh and the 4x4 world->normalized
     transform applied (so photo extrinsics can be moved into the same frame).
@@ -117,7 +117,7 @@ def normalize_to_front_frame(mesh: o3d.geometry.TriangleMesh,
     out = o3d.geometry.TriangleMesh(mesh)
     # The ARKit face-anchor origin is world (0,0,0) ≈ the head centre; crop a
     # head-sized sphere around it to drop shoulders, clothing, and background.
-    out = crop_to_head(out, np.zeros(3), radius_mm)
+    out = crop_to_head(out, np.zeros(3) if crop_center is None else crop_center, radius_mm)
     out = keep_main_components(out)
     center = out.get_center()
     out.translate(-center)
@@ -265,6 +265,31 @@ def process_session(raw_dir: str, out_dir: str,
     return stats
 
 
+def display_crop(oc) -> tuple[np.ndarray, float, str]:
+    """Keep all detected facial landmarks, plus room for the jaw and hairline.
+
+    The operator's synthesized head origin can sit far behind the chin. A
+    small sphere at that origin cuts off valid facial geometry. Center this
+    display-only crop on the actual face bounds instead. A minimum radius
+    override may expand the crop but cannot shrink it through the face.
+    """
+    points = getattr(oc, "face_landmarks", None)
+    if points is not None:
+        points = np.asarray(points, dtype=float)
+        if points.ndim == 2 and points.shape[1] == 3:
+            points = points[np.isfinite(points).all(axis=1)]
+            if len(points) >= photogrammetry.MIN_CORRESPONDENCES:
+                center = (points.min(axis=0) + points.max(axis=0)) / 2
+                radius = float(np.linalg.norm(points - center, axis=1).max())
+                radius += DISPLAY_FACE_MARGIN_MM
+                # Explicit overrides retain their role for tuning, while the
+                # default uses the detected face size instead of 160 mm.
+                if "VECTRA_DISPLAY_CROP_MM" in os.environ:
+                    radius = max(radius, DISPLAY_CROP_RADIUS_MM)
+                return center, radius, "facial_landmarks"
+    return np.zeros(3), max(160.0, DISPLAY_CROP_RADIUS_MM), "head_fallback"
+
+
 def _write_oc_display_meshes(oc, out_dir: str,
                              texture_mode: str) -> tuple[bool, bool]:
     """Write mesh.glb / mesh_textured.glb from an Object Capture result.
@@ -272,13 +297,29 @@ def _write_oc_display_meshes(oc, out_dir: str,
     OC geometry is already clean — no cosmetic smoothing needed beyond a light
     Taubin. Normalized into the same canonical face frame the measurement mesh
     uses (its own recentre — OC and TSDF centroids differ by a few mm,
-    irrelevant for a standalone display model). The tighter face-focused crop
-    (+ keep_main_components inside normalize_to_front_frame) trims OC's gray
-    hair/neck blob halo; the SAME crop radius + recenter (oc_w2n) is reused for
-    the textured mesh so the Smooth/Textured toggle stays aligned."""
+    irrelevant for a standalone display model). Both display variants use the
+    same landmark-based crop and recentering, preserving their alignment."""
     vertex_ok = textured_ok = False
+    crop_center, crop_radius, crop_source = display_crop(oc)
+    # Retain the accepted surface before cropping, so later display adjustments
+    # can reuse this reconstruction without another photogrammetry run.
+    if oc.textured is not None:
+        np.savez_compressed(
+            os.path.join(out_dir, "display_uncropped.npz"),
+            vertices=oc.textured.vertex.positions.numpy(),
+            triangles=oc.textured.triangle.indices.numpy(),
+            texture_uvs=oc.textured.triangle["texture_uvs"].numpy(),
+            albedo=oc.textured.material.texture_maps["albedo"].as_tensor().numpy(),
+            face_landmarks=(oc.face_landmarks if oc.face_landmarks is not None
+                            else np.empty((0, 3))))
+    oc.stats.update({
+        "display_crop_source": crop_source,
+        "display_crop_center_mm": crop_center.tolist(),
+        "display_crop_radius_mm": crop_radius,
+        "display_crop_margin_mm": DISPLAY_FACE_MARGIN_MM,
+    })
     oc_disp, oc_w2n = normalize_to_front_frame(
-        oc.mesh, np.eye(4), radius_mm=DISPLAY_CROP_RADIUS_MM)
+        oc.mesh, np.eye(4), radius_mm=crop_radius, crop_center=crop_center)
     if OC_DISPLAY_TAUBIN_ITERS:
         # Taubin drops vertex colours; vertex count/order is preserved, so
         # re-attach the pre-smoothing colours.
@@ -300,7 +341,7 @@ def _write_oc_display_meshes(oc, out_dir: str,
         # (UVs + albedo untouched).
         textured_ok = photogrammetry.write_normalized_textured_glb(
             oc.textured, oc_w2n, os.path.join(out_dir, "mesh_textured.glb"),
-            crop_center=np.zeros(3), crop_radius_mm=DISPLAY_CROP_RADIUS_MM,
+            crop_center=crop_center, crop_radius_mm=crop_radius,
             smooth_iters=OC_DISPLAY_TAUBIN_ITERS)
     return vertex_ok, textured_ok
 
