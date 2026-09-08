@@ -10,12 +10,13 @@ import json
 import os
 import shutil
 import sys
+from functools import lru_cache
 
 import numpy as np
 import open3d as o3d
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from vectra3d import analyze, compare, fuse, io_session, photogrammetry  # noqa: E402
+from vectra3d import analyze, compare, fuse, io_session, photogrammetry, quality  # noqa: E402
 
 
 # Keep only geometry within this radius (mm) of the face-anchor centre (≈ head
@@ -134,7 +135,8 @@ def process_session(raw_dir: str, out_dir: str,
 
     HYBRID geometry (deliberate split of measurement vs display):
       * mesh.ply (measurement) is ALWAYS the depth-fusion (TSDF) mesh. That is the
-        geometry on which ±0.2 mL volume accuracy was validated. Apple Object
+        geometry used in the synthetic TrueDepth benchmark, not a real-patient
+        accuracy validation. Apple Object
         Capture's photogrammetry mesh, even after metric landmark alignment,
         deviates ~7 mm from the TrueDepth surface and aligns non-deterministically,
         so it is NOT trusted for measurement.
@@ -177,7 +179,11 @@ def process_session(raw_dir: str, out_dir: str,
                                 sdf_trunc_mm=sdf_trunc)
     mesh, world_to_norm = normalize_to_front_frame(world_mesh, poses[0].world_to_camera)
     # mesh.ply: geometry + per-vertex colour — drives the volume measurement.
-    o3d.io.write_triangle_mesh(os.path.join(out_dir, "mesh.ply"), mesh)
+    if not o3d.io.write_triangle_mesh(os.path.join(out_dir, "mesh.ply"), mesh):
+        raise RuntimeError("Could not write the measurement mesh")
+    measurement_quality = quality.inspect_mesh(crop_to_face(mesh))
+    measurement_quality["mesh_sha256"] = quality.mesh_fingerprint(
+        os.path.join(out_dir, "mesh.ply"))
 
     # --- Display geometry: prefer photoreal Object Capture; fall back to TSDF.
     display_source = "tsdf"
@@ -240,10 +246,15 @@ def process_session(raw_dir: str, out_dir: str,
     stats = {
         "reconstruction": "tsdf",          # measurement geometry (always)
         "display_source": display_source,  # geometry shown in the viewer
-        # Depth sessions carry a real measurement mesh. Note the ±0.2 mL volume
-        # validation was done on TrueDepth; rear-LiDAR is measurement-grade in
-        # kind but unvalidated in accuracy until re-tested.
-        "measurement_grade": True,
+        # Eligibility means engineering screens passed, never clinical accuracy.
+        "has_measurement_mesh": True,
+        "measurement_grade": measurement_quality["eligible"],
+        "measurement_quality": measurement_quality,
+        "display_quality": {
+            "status": "needs_review" if oc_stats.get("oc_error") else "ready",
+            "reason": ("Photo reconstruction failed; displaying the depth-mesh fallback."
+                       if oc_stats.get("oc_error") else ""),
+        },
         "vertices": len(mesh.vertices),
         "triangles": len(mesh.triangles),
         "surface_area_mm2": round(float(mesh.get_surface_area()), 1),
@@ -256,6 +267,10 @@ def process_session(raw_dir: str, out_dir: str,
         "device": meta.get("device", ""),
         "patient_id": meta.get("patient_id", ""),
     }
+    stats["measurement_warning"] = (
+        "Rear LiDAR volume accuracy is unvalidated."
+        if meta.get("device") == "iphone-rear-lidar"
+        else "Real-patient volume accuracy is unvalidated.")
     # OC scale/rms/ipd display diagnostics (its "reconstruction" key would clobber
     # the measurement source, so drop it — the display geometry is display_source).
     stats.update({k: v for k, v in oc_stats.items() if k != "reconstruction"})
@@ -417,7 +432,9 @@ def crop_to_face(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.TriangleMesh:
 
 
 def compare_sessions_on_disk(before_mesh_path: str, after_mesh_path: str,
-                             out_dir: str) -> dict:
+                             out_dir: str, *, experimental: bool = False) -> dict:
+    fingerprints = [quality.mesh_fingerprint(path)
+                    for path in (before_mesh_path, after_mesh_path)]
     before = o3d.io.read_triangle_mesh(before_mesh_path)
     after = o3d.io.read_triangle_mesh(after_mesh_path)
     before = crop_to_face(before)
@@ -425,7 +442,10 @@ def compare_sessions_on_disk(before_mesh_path: str, after_mesh_path: str,
     before.compute_vertex_normals()
     after.compute_vertex_normals()
 
-    result = compare.compare_sessions(before, after)
+    result = (compare.compare_experimental if experimental else compare.compare_sessions)(before, after)
+    if fingerprints != [quality.mesh_fingerprint(path)
+                        for path in (before_mesh_path, after_mesh_path)]:
+        raise quality.QualityError("A scan changed during comparison. Wait for processing to finish.")
     os.makedirs(out_dir, exist_ok=True)
 
     analyze.save_colored_mesh(before, result.field,
@@ -434,18 +454,97 @@ def compare_sessions_on_disk(before_mesh_path: str, after_mesh_path: str,
     total_ml = sum(r.volume_mm3 for r in significant) / 1000.0
     analyze.save_heatmap_png(
         result.field, os.path.join(out_dir, "heatmap.png"),
-        f"net change in detected regions: {total_ml:+.2f} mL "
-        f"({len(significant)} significant region(s))")
+        "EXPERIMENTAL: raw surface discrepancy\nQuality warnings may apply. No volume estimate."
+        if experimental else f"net change in detected regions: {total_ml:+.2f} mL "
+        f"({len(significant)} significant region(s))",
+        colorbar_label="Uncorrected surface discrepancy (mm)" if experimental else "surface change (mm)")
 
     valid = np.isfinite(result.field.distances)
     summary = {
         "regions": [r.to_dict() for r in result.regions],
-        "net_significant_volume_ml": round(total_ml, 3),
-        "noise_floor_ml": compare.NOISE_FLOOR_MM3 / 1000.0,
+        "net_significant_volume_ml": None if experimental else round(total_ml, 3),
+        "noise_floor_ml": None if experimental else compare.NOISE_FLOOR_MM3 / 1000.0,
+        "experimental": experimental,
+        "diagnostic_only": experimental,
         "surface_rms_mm": round(float(
             np.sqrt(np.mean(result.field.distances[valid] ** 2))), 3) if valid.any() else None,
         "transform": np.asarray(result.transform).tolist(),
+        "quality_checks": result.quality_checks,
+        "input_mesh_sha256": dict(zip(("before", "after"), fingerprints)),
     }
     with open(os.path.join(out_dir, "result.json"), "w") as f:
         json.dump(summary, f, indent=2)
     return summary
+
+
+@lru_cache(maxsize=64)
+def _check_saved_mesh(path: str, revision: tuple) -> dict:
+    """Read-only checks for legacy scans; cache by file identity and revision."""
+    mesh = o3d.io.read_triangle_mesh(path)
+    report = quality.inspect_mesh(crop_to_face(mesh))
+    report["mesh_sha256"] = quality.mesh_fingerprint(path)
+    info = os.stat(path)
+    if (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != revision:
+        raise quality.QualityError("Measurement mesh changed while it was being checked.")
+    return report
+
+
+def session_with_quality(sdir: str, meta: dict) -> dict:
+    """Assess existing legacy meshes without rewriting or reprocessing scans."""
+    if not meta.get("processed") or meta.get("status") in ("queued", "processing", "failed"):
+        return meta
+    try:
+        with open(os.path.join(sdir, "stats.json")) as stream:
+            stats = json.load(stream)
+        path = os.path.join(sdir, "mesh.ply")
+        if (not stats.get("measurement_quality")
+                and stats.get("measurement_grade") is not False and os.path.isfile(path)):
+            info = os.stat(path)
+            revision = (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            stats["measurement_quality"] = _check_saved_mesh(path, revision)
+            stats["measurement_grade"] = stats["measurement_quality"]["eligible"]
+            stats["measurement_warning"] = "Engineering checks only; real-patient accuracy unvalidated."
+        return {**meta, "stats": stats,
+                "photo_comparison_available": (stats.get("align_method") == "landmark_umeyama"
+                    and os.path.isfile(os.path.join(sdir, "display_uncropped.npz")))}
+    except (OSError, ValueError, RuntimeError):
+        return {**meta, "stats": {"measurement_quality": {
+            "version": quality.QUALITY_VERSION, "eligible": False,
+            "reasons": ["Quality report or measurement mesh is unavailable. Try again after processing."]}}}
+
+
+def require_session_photo(sdir: str, meta: dict) -> str:
+    """Only completed, retained photo geometry is eligible for the opt-in path."""
+    if (not meta.get("processed") or meta.get("status") in ("queued", "processing", "failed")):
+        raise quality.QualityError("Photo session is not finished. Wait for processing to complete.")
+    if not session_with_quality(sdir,meta).get("photo_comparison_available"):
+        raise quality.QualityError("This session has no retained, landmark-anchored photo surface.")
+    return os.path.join(sdir,"display_uncropped.npz")
+
+
+def require_session_measurement(sdir: str, meta: dict, *, experimental: bool = False) -> None:
+    """Fail closed on active, failed, unsafe, or changed processing artifacts."""
+    if meta.get("status") in ("queued", "processing"):
+        raise quality.QualityError("Scan is still processing. Wait for it to finish.")
+    if not meta.get("processed") or meta.get("status") == "failed":
+        raise quality.QualityError("Scan has no successful current processing result.")
+    try:
+        with open(os.path.join(sdir, "stats.json")) as stream:
+            stats = json.load(stream)
+    except (OSError, ValueError):
+        raise quality.QualityError("Scan has no quality report. Reprocess a copy first.")
+    stats = session_with_quality(sdir, meta).get("stats", stats)
+    report = stats.get("measurement_quality", {})
+    if not report:
+        if stats.get("measurement_grade") is False:
+            raise quality.QualityError("Photo-only scan has no depth measurement mesh.")
+        raise quality.QualityError("Legacy scan has not passed the current quality checks. "
+                                   "Reprocess a copy first.")
+    if report.get("version") != quality.QUALITY_VERSION or (not experimental and not report.get("eligible")):
+        raise quality.QualityError("Scan is not eligible for measurement: "
+                                   + " ".join(report.get("reasons", ["Quality checks required."])))
+    mesh_path = os.path.join(sdir, "mesh.ply")
+    if (not os.path.isfile(mesh_path)
+            or quality.mesh_fingerprint(mesh_path) != report.get("mesh_sha256")):
+        raise quality.QualityError("Measurement mesh changed after its quality check. "
+                                   "Reprocess a copy first.")

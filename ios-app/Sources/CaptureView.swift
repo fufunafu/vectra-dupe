@@ -402,7 +402,7 @@ private struct PoseStepper: View {
     let phase: CaptureController.Phase
 
     var body: some View {
-        // Nine steps don't fit the screen width, so the rail scrolls and keeps
+        // The steps may exceed the screen width, so the rail scrolls and keeps
         // the active step centred. The pill (background) stays screen-width;
         // only the nodes inside scroll. Connectors are fixed-width here — a
         // flexible `maxWidth: .infinity` is unbounded inside a horizontal
@@ -479,8 +479,6 @@ private struct PoseStepper: View {
         case .right:     return "arrow.right.to.line"
         case .brow:      return "arrow.up"
         case .jaw:       return "arrow.down"
-        case .earLeft:   return "ear"
-        case .earRight:  return "ear"
         }
     }
 
@@ -493,8 +491,6 @@ private struct PoseStepper: View {
         case .right:     return "Right"
         case .brow:      return "Brow"
         case .jaw:       return "Jaw"
-        case .earLeft:   return "Ear L"
-        case .earRight:  return "Ear R"
         }
     }
 

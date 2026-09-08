@@ -20,7 +20,7 @@ import open3d as o3d
 import scipy.sparse as sp
 from scipy.sparse.csgraph import connected_components
 
-from . import analyze, register
+from . import analyze, register, quality
 
 DETECT_THRESHOLD_MM = 0.35   # ~1.5x the repeat-scan RMS measured in phase 0
 MIN_REGION_AREA_MM2 = 150.0
@@ -58,6 +58,7 @@ class CompareResult:
     regions: list = dataclass_field(default_factory=list)
     transform: np.ndarray = None
     aligned_after: o3d.geometry.TriangleMesh = None
+    quality_checks: dict = dataclass_field(default_factory=dict)
 
 
 def _smooth_on_mesh(adj: sp.csr_matrix, values: np.ndarray,
@@ -120,18 +121,53 @@ def _exclusion_mask(points: np.ndarray, regions: list[ChangeRegion]) -> np.ndarr
     return mask
 
 
+def compare_experimental(before, after) -> CompareResult:
+    """Uncorrected surface diagnostic. Never integrate a volume or remove bias."""
+    checks = {"version": quality.QUALITY_VERSION, "diagnostic_only": True,
+              "warnings": [], "note": "Surface discrepancy includes reconstruction and alignment errors. "
+              "Not a tissue-change measurement. No intercanthal scaling applied."}
+    for label, mesh in (("before", before), ("after", after)):
+        report = quality.inspect_mesh(mesh)
+        if "front_coverage" not in report:
+            raise quality.QualityError(f"{label}: empty or invalid measurement mesh.")
+        checks[label] = report
+        checks["warnings"].extend(f"{label}: {reason}" for reason in report["reasons"])
+    transform = register.register_with_exclusion(after, before)
+    aligned = o3d.geometry.TriangleMesh(after).transform(transform)
+    checks["alignment"] = quality.inspect_alignment(before, aligned)
+    if not checks["alignment"]["eligible"]:
+        checks["warnings"].append("Alignment/shared coverage check failed; colors may reflect misalignment.")
+    field = analyze.signed_distance_field(before, aligned)
+    if not np.isfinite(field.distances).any():
+        raise quality.QualityError("No shared surface could be mapped, even experimentally.")
+    try:
+        checks["distance_coverage"] = quality.require_distance_coverage(
+            field, ~analyze.boundary_band_mask(before))
+    except quality.QualityError as exc:
+        checks["warnings"].append(str(exc))
+    return CompareResult(field=field, transform=transform, aligned_after=aligned,
+                         quality_checks=checks)
+
+
 def compare_sessions(before: o3d.geometry.TriangleMesh,
                      after: o3d.geometry.TriangleMesh) -> CompareResult:
+    checks = {"version": quality.QUALITY_VERSION,
+              "before": quality.require_mesh(before, "Before scan"),
+              "after": quality.require_mesh(after, "After scan"),
+              "note": "Experimental surface-change estimate, not validated clinical volume."}
+    eligible = ~analyze.boundary_band_mask(before)
     # Pass 1: blind registration and rough field to locate change regions.
     t1 = register.register_with_exclusion(after, before)
     aligned = o3d.geometry.TriangleMesh(after).transform(t1)
+    checks["alignment"] = quality.require_alignment(before, aligned)
     rough = analyze.signed_distance_field(before, aligned)
+    checks["distance_coverage"] = quality.require_distance_coverage(rough, eligible)
     rough = analyze.subtract_bias_field(rough)
     regions = detect_change_regions(before, rough)
 
     if not regions:
         return CompareResult(field=rough, regions=[], transform=t1,
-                             aligned_after=aligned)
+                             aligned_after=aligned, quality_checks=checks)
 
     # Pass 2: redo registration and bias fit with the regions excluded, then
     # re-measure volumes over the FROZEN pass-1 region geometry. Re-detecting
@@ -141,17 +177,20 @@ def compare_sessions(before: o3d.geometry.TriangleMesh,
         after, before, exclude_fn=lambda pts: _exclusion_mask(pts, regions),
         init=t1)
     aligned = o3d.geometry.TriangleMesh(after).transform(t2)
+    checks["alignment"] = quality.require_alignment(before, aligned)
     fine = analyze.signed_distance_field(before, aligned)
+    checks["distance_coverage"] = quality.require_distance_coverage(fine, eligible)
     fine = analyze.subtract_bias_field(
         fine, exclude_mask=_exclusion_mask(fine.vertices, regions))
 
     final_regions = []
     for r in regions:
         center = np.asarray(r.center)
+        in_roi = (np.linalg.norm(fine.vertices - center, axis=1) <= r.radius_mm)
+        quality.require_distance_coverage(fine, in_roi & eligible, "Changed region")
         volume = analyze.roi_volume_mm3(fine, center, r.radius_mm)
         if abs(volume) < MIN_REGION_VOLUME_MM3:
             continue
-        in_roi = (np.linalg.norm(fine.vertices - center, axis=1) <= r.radius_mm)
         d_roi = fine.distances[in_roi]
         final_regions.append(ChangeRegion(
             center=r.center, radius_mm=r.radius_mm, volume_mm3=volume,
@@ -160,4 +199,4 @@ def compare_sessions(before: o3d.geometry.TriangleMesh,
             mean_mm=float(np.nanmean(d_roi)) if np.isfinite(d_roi).any() else 0.0))
     final_regions.sort(key=lambda r: -abs(r.volume_mm3))
     return CompareResult(field=fine, regions=final_regions, transform=t2,
-                         aligned_after=aligned)
+                         aligned_after=aligned, quality_checks=checks)

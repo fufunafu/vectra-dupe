@@ -87,6 +87,99 @@ the real VECTRA exports in `Vectra-files/`.
 
 ## Honest limitations
 
+### Measurement safety screens
+
+Processing now reports preview quality separately from measurement eligibility.
+The web viewer shows `Processing`, `Unchecked`, `Quality warning`, or `Checks passed`
+instead of treating every exported model as a successful measurement. The last
+label means engineering screens passed, **not clinical validation**.
+
+The central frontal depth surface must have at least 85% ray coverage and no more
+than 10% rays intersecting distinct overlapping layers. Comparisons additionally
+require bidirectional alignment fitness of 85% at 2 mm, inlier RMSE at most 1 mm,
+and 85% area-weighted valid distance coverage globally and in each detected region.
+These are conservative failure screens, not a calibrated cc detection limit.
+Scans outside the expected canonical millimetre frame can also fail them.
+
+The API blocks active jobs, failed processing and changed mesh files. Existing
+legacy meshes are checked on read without changing their files or reconstructing
+them again. Geometry is checked again during comparison, which returns HTTP 422
+on a quality failure without writing a new volume result. Rear LiDAR and
+real-patient repeatability remain unvalidated.
+
+The optional **Experimental surface comparison** checkbox allows finished depth
+scans with quality warnings to be selected. It produces an uncorrected surface
+discrepancy map with the geometry/alignment warnings attached, never a cc estimate
+or a zero-volume result. It does not apply intercanthal scaling. Results use a
+separate `__experimental` suffix, leaving normal comparison results intact.
+Active jobs, missing/changed meshes, invalid geometry, and copies of the same
+capture remain blocked in both modes. Normal volume thresholds are unchanged.
+
+Experimental mode also offers **Photo models: inner-eye scale + upper-face
+alignment** for sessions with retained `display_uncropped.npz` and indexed
+landmarks. This is a separate research path, not a repair or promotion of the
+depth measurement mesh. It redetects landmarks on a close-up render, normalizes
+both models by their inner-canthus distance, and rigidly aligns upper-face
+landmarks plus a bounded forehead-only refinement. Its surface check uses
+point-to-triangle distances so different tessellations do not masquerade as
+alignment error. Mouth and cheek changes are excluded from alignment; no bias
+field is subtracted.
+
+Without a directly measured intercanthal distance, this path provides a
+relative-scale heatmap only. With a user-entered distance in mm, it can report
+exploratory signed volumes over fixed, projected left/right lower-face patches.
+Any missing or layered ray in a patch withholds that patch's volume. These are
+not validated clinical measurements, gauze volumes, or treatment amounts.
+Results and landmark diagnostics are stored separately with a `__photo` suffix;
+the original captures, depth meshes, and previous results remain unchanged.
+
+The 3D heatmap has a **Heatmap sensitivity** slider at the bottom left. Moving
+right reveals smaller differences with stronger colors; moving left reduces
+contrast. Reset returns to the default +/-2.5 scale. The live legend follows
+the slider, uncalibrated photo results retain approximate-reference units,
+and missing samples remain gray. This is display only: no change to alignment,
+volumes, region detection, or quality checks. Saved PNG maps keep their default
+scale. New comparisons include a hash-bound `heatmap.display.json` containing
+unclipped scalar samples. Older results without this file show a disabled slider;
+rerun Compare, or use `tools/backfill_heatmap_display.py RESULT_DIRECTORY` for
+a saved photo result whose sources and geometry are unchanged. Sensitivity
+works on localhost, HTTPS, and plain HTTP LAN addresses. On LAN HTTP, an in-app
+SHA-256 fallback verifies the same asset hashes without requiring Web Crypto.
+These checks detect mismatched assets; they do not encrypt the HTTP connection.
+
+Photo comparisons also keep the original before-scan texture under the heatmap.
+**Show face texture** toggles the photo layer, and **Heatmap opacity** blends
+between the untouched face (0%) and stronger change colors. Small differences
+fade toward the photo; missing samples receive no tint, so an untinted area is
+not proof of zero change. Turn off the photo layer to see invalid samples in
+gray. Texture coordinates are transferred per triangle corner to preserve atlas
+seams, with no geometry deformation or landmark movement. The original atlas is
+kept at full resolution in `heatmap.texture.png`; `heatmap.uv.bin` maps it onto
+the displayed comparison mesh. These patient assets stay local and out of Git.
+
+The interactive viewer uses reference-style colors: positive distances are
+blue/cyan, negative distances orange/yellow. This reverses the old color
+convention, not the underlying signed data. **Contour lines** adds white
+isolines at seven evenly spaced levels on each side of zero. The displayed
+line interval and legend update with sensitivity. Missing samples and clipped
+extremes have no contour lines; photo opacity also controls the lines. These
+are surface-distance contours, not cc contours. Previously saved PNG maps keep
+their original red/blue palette and default scale.
+
+On the textured overlay, near-zero color and contour opacity smoothly fade to
+transparent instead of whitening the face. The legend shows this transparency
+over a checkerboard. Full tint is reached at 60% of the chosen display range;
+this is a visual fade, not a measurement threshold. Plain color-map mode keeps
+its white zero point, since there is no underlying photo to reveal.
+
+For a recoverable local diagnostic run, set `VECTRA_OC_ATTEMPTS=1` and
+`VECTRA_OC_DEBUG=1` when running `tools/reprocess_copy.py`. The new session retains
+the OBJ, diffuse texture and landmark render in `oc_debug/`; the source is untouched.
+Diagnostics contain patient imagery and must remain local and out of Git.
+`tools/recover_preview.py PATIENT_ID COPY_SESSION_ID` can reuse a copy's retained
+OBJ after a face-search fix. All existing alignment guards still run, and the
+original session, raw data and depth measurement mesh are checked for changes.
+
 - iOS-only capture (Android lacks a universal depth sensor).
 - Expression/jaw drift between sessions is the dominant real-world error;
   the capture gates help but real-face validation (Phase 4) is pending.

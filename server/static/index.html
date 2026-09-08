@@ -91,6 +91,8 @@
           white-space: nowrap; letter-spacing: .02em; }
   .pill.ok    { background: #51d98c22; color: var(--ok); }
   .pill.wait  { background: #ffc35322; color: #ffc353; }
+  .pill.bad   { background: #f8717122; color: var(--danger); }
+  .quality-note { margin-top: 9px; font-size: 12px; line-height: 1.45; color: #ffc353; }
 
   .item-actions { display: flex; gap: 7px; margin-top: 11px; }
   .item-actions button { flex: 1; padding: 8px; font-size: 12.5px; font-weight: 600; }
@@ -112,13 +114,22 @@
        color: var(--muted); background: #0d1117aa; padding: 6px 11px;
        border-radius: 8px; border: 1px solid var(--hairline); backdrop-filter: blur(6px); }
   #legend-wrap { position: absolute; right: 18px; bottom: 18px; display: flex;
-       align-items: stretch; gap: 8px; height: 190px; }
+       align-items: stretch; gap: 8px; height: min(360px, 45vh); }
   #legend-labels { display: flex; flex-direction: column; justify-content: space-between;
        font-size: 11px; color: var(--muted); text-align: right; }
   #legend { width: 16px; border-radius: 5px; border: 1px solid var(--hairline);
        background: linear-gradient(to top, #2166ac, #f7f7f7, #b2182b); }
-  #legend-title { position: absolute; right: 18px; bottom: 214px; font-size: 10px;
+  #legend-title { position: absolute; right: 18px; bottom: calc(min(360px, 45vh) + 24px); font-size: 10px;
        letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  [hidden] { display: none !important; }
+  #heatmap-controls { position: absolute; left: 18px; bottom: 18px;
+       width: min(330px, calc(100% - 140px)); padding: 14px 16px;
+       background: #11161deF; border: 1px solid var(--hairline); border-radius: 12px; }
+  #heatmap-controls .row { justify-content: space-between; margin: 0 0 8px; }
+  #heatmap-controls button { padding: 3px 8px; font-size: 11px; }
+  #heatmap-controls input[type=range] { display: block; width: 100%; padding: 0; margin: 12px 0 8px;
+       accent-color: var(--accent); cursor: pointer; }
+  #heatmap-controls output { color: var(--accent-br); font-variant-numeric: tabular-nums; }
 
   /* Indeterminate processing indicator with elapsed time. */
   #progress-overlay { position: absolute; inset: 0; display: none;
@@ -164,12 +175,26 @@
     <div id="sessions"></div>
 
     <h2>Compare</h2>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">Choose two independent captures. Normal depth-volume mode requires quality checks. Recovery copies are not new scans.</div>
+    <label style="display:block;font-size:12px;margin-bottom:8px"><input type="checkbox" id="experimental-compare"> Experimental surface comparison</label>
+    <div id="experimental-options" hidden>
+      <label style="display:block;font-size:12px">Comparison geometry
+        <select id="comparison-source" style="width:100%;margin:6px 0">
+          <option value="photo">Photo models: inner-eye scale + upper-face alignment</option>
+          <option value="depth">Depth diagnostic: uncorrected, no cc</option>
+        </select>
+      </label>
+      <label id="intercanthal-label" style="display:block;font-size:12px">Measured intercanthal distance (mm)
+        <input id="intercanthal-mm" type="number" min="1" max="99" step="any" placeholder="Optional, use her actual measurement" style="width:100%;box-sizing:border-box;margin:6px 0">
+      </label>
+    </div>
+    <div id="experimental-note" class="quality-note" hidden></div>
     <div class="row">
-      <select id="before-select" style="flex:1"></select>
+      <select id="before-select" aria-label="Before scan" style="flex:1"></select>
     </div>
     <div class="row">
-      <select id="after-select" style="flex:1"></select>
-      <button id="run-compare" class="primary">Compare</button>
+      <select id="after-select" aria-label="After scan" style="flex:1"></select>
+      <button id="run-compare" class="primary" disabled>Compare</button>
     </div>
 
     <h2>Results</h2>
@@ -192,8 +217,26 @@
       </div>
     </div>
   </div>
-  <div id="legend-title">Δ surface</div>
-  <div id="legend-wrap">
+  <div id="heatmap-controls" hidden>
+    <div class="row"><label for="heatmap-sensitivity">Heatmap sensitivity</label>
+      <button id="reset-sensitivity" type="button">Reset</button></div>
+    <output id="sensitivity-range" for="heatmap-sensitivity"></output>
+    <input id="heatmap-sensitivity" type="range" min="0" max="100" step="1" value="50"
+      aria-describedby="sensitivity-note sensitivity-status">
+    <div class="row muted"><span>Less sensitive</span><span>More sensitive</span></div>
+    <label><input id="show-contours" type="checkbox" checked disabled> Contour lines</label>
+    <div id="contour-spacing" class="muted" hidden></div>
+    <div id="texture-controls" hidden>
+      <label><input id="show-face-texture" type="checkbox" checked> Show face texture</label>
+      <div class="row" style="margin-top:8px"><label for="heatmap-opacity">Heatmap opacity</label>
+        <output id="opacity-value" for="heatmap-opacity">70%</output></div>
+      <input id="heatmap-opacity" type="range" min="0" max="100" step="1" value="70">
+    </div>
+    <div id="sensitivity-note" class="muted">Display only. Volumes and quality checks stay unchanged. Gray = no valid sample. Saved 2D map keeps its original colors and scale.</div>
+    <div id="sensitivity-status" class="quality-note" hidden></div>
+  </div>
+  <div id="legend-title" hidden>Δ surface</div>
+  <div id="legend-wrap" hidden>
     <div id="legend-labels"><span>+2.5 mm</span><span>0</span><span>−2.5 mm</span></div>
     <div id="legend"></div>
   </div>
@@ -210,6 +253,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { rangeForSensitivity, heatmapRGB, validateHeatmapData, referencePalette,
+  contourInterval, CONTOUR_BANDS, overlayStrength, OVERLAY_FULL_TINT_FRACTION } from './heatmap-display.mjs';
+import { hashBytes } from './sha256.mjs';
 
 const api = (path, opts) => fetch(path, opts).then(async r => {
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
@@ -265,6 +311,155 @@ scene.add(key);
 const fill = new THREE.DirectionalLight(0xffffff, 0.5); fill.position.set(-0.6, 0.1, 0.4);
 scene.add(fill);
 let meshObj = null;
+let heatmapData = null, heatmapApproximate = false, meshLoadId = 0;
+const overlayUniforms = { faceVisible: { value: 1 }, overlayOpacity: { value: 0.7 },
+  displayRange: { value: 2.5 }, contoursVisible: { value: 1 } };
+
+function showHeatmapControls(visible) {
+  for (const id of ['heatmap-controls', 'legend-title', 'legend-wrap']) el(id).hidden = !visible;
+}
+
+function updateHeatmapSensitivity() {
+  const range = heatmapData ? rangeForSensitivity(el('heatmap-sensitivity').value) : 2.5;
+  const value = Number(range.toFixed(3)).toString();
+  const unit = heatmapApproximate ? 'approx. reference mm' : 'mm';
+  overlayUniforms.displayRange.value = range;
+  const step = contourInterval(range);
+  el('contour-spacing').textContent = `Line interval: ${Number(step.toFixed(3))} ${unit}`;
+  el('sensitivity-range').textContent = `Full color at ±${value} ${unit}`;
+  el('heatmap-sensitivity').setAttribute('aria-valuetext', `Full color at plus or minus ${value} ${unit}`);
+  const ticks = heatmapData ? Array.from({ length: CONTOUR_BANDS * 2 + 1 }, (_, i) => {
+    const level = CONTOUR_BANDS - i;
+    return `${level > 0 ? '+' : level < 0 ? '−' : ''}${Number((Math.abs(level) * step).toFixed(3))}`;
+  }) : [`+${value}`, '0', `−${value}`];
+  el('legend-labels').replaceChildren(...ticks.map(v => {
+    const span = document.createElement('span'); span.textContent = v; return span;
+  }));
+  el('legend-title').textContent = `Δ surface (${unit})`;
+  if (!heatmapData || !meshObj) return;
+  const geo = meshObj.geometry, colors = geo.attributes.color;
+  const indices = geo.userData.sampleIndices;
+  const palette = heatmapData.linearPalette;
+  const gray = new THREE.Color().setRGB(0.55, 0.55, 0.55, THREE.SRGBColorSpace);
+  for (let i = 0; i < colors.count; i++) {
+    const d = heatmapData.distances[indices ? indices[i] : i];
+    const valid = d !== null && Number.isFinite(d);
+    const rgb = valid ? heatmapRGB(d, range, palette) : [gray.r, gray.g, gray.b];
+    colors.setXYZ(i, ...rgb);
+  }
+  colors.needsUpdate = true;
+}
+el('heatmap-sensitivity').addEventListener('input', updateHeatmapSensitivity);
+el('reset-sensitivity').onclick = () => {
+  el('heatmap-sensitivity').value = 50;
+  updateHeatmapSensitivity();
+};
+function updateOverlay() {
+  const showFace = el('show-face-texture').checked;
+  overlayUniforms.faceVisible.value = showFace ? 1 : 0;
+  overlayUniforms.overlayOpacity.value = Number(el('heatmap-opacity').value) / 100;
+  el('opacity-value').textContent = `${el('heatmap-opacity').value}%`;
+  el('heatmap-opacity').disabled = !showFace;
+  el('sensitivity-note').textContent = showFace
+    ? 'Near-zero change fades to transparent, revealing the face. Untinted areas can also mean no valid sample. Display only; volumes and checks stay unchanged. Saved 2D map keeps its original colors and scale.'
+    : 'Color map only. Gray = no valid sample. Display only; volumes and checks stay unchanged. Saved 2D map keeps its original colors and scale.';
+  updateLegend();
+}
+function updateLegend() {
+  if (!heatmapData) return;
+  const textured = !!meshObj?.material.map && el('show-face-texture').checked;
+  const opacity = Number(el('heatmap-opacity').value) / 100;
+  const palette = referencePalette();
+  const stops = palette.map((c, i) => {
+    const alpha = textured ? opacity * overlayStrength(2 * i / 255 - 1, 1) : 1;
+    return `rgba(${c.map(v => Math.round(v * 255)).join(',')},${alpha})`;
+  });
+  el('legend').style.background = `linear-gradient(to top, ${stops.join(',')}), repeating-conic-gradient(#35404c 0% 25%, #111820 0% 50%) 0 0 / 8px 8px`;
+}
+el('show-face-texture').onchange = updateOverlay;
+el('heatmap-opacity').addEventListener('input', updateOverlay);
+el('show-contours').onchange = () => {
+  overlayUniforms.contoursVisible.value = el('show-contours').checked ? 1 : 0;
+};
+
+function configureHeatmapMaterial(material) {
+  material.extensions = { ...material.extensions, derivatives: true };
+  material.onBeforeCompile = shader => {
+    Object.assign(shader.uniforms, overlayUniforms);
+    shader.vertexShader = `attribute float heatmapDistance;
+      attribute float heatmapValid;
+      varying float vHeatmapDistance;
+      varying float vHeatmapValid;\n` + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>',
+      `#include <begin_vertex>
+       vHeatmapDistance = heatmapDistance;
+       vHeatmapValid = heatmapValid;`);
+    shader.fragmentShader = `uniform float faceVisible;
+      uniform float overlayOpacity;
+      uniform float displayRange;
+      uniform float contoursVisible;
+      varying float vHeatmapDistance;
+      varying float vHeatmapValid;\n` + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', `
+      float validSample = step(0.999, vHeatmapValid);
+      float strength = smoothstep(0.0, ${OVERLAY_FULL_TINT_FRACTION.toFixed(1)}, abs(vHeatmapDistance) / displayRange);
+      vec3 shownColor = vColor.rgb;
+      float lineOpacity = 0.72;
+      #ifdef USE_MAP
+        if (faceVisible > 0.5) {
+          shownColor = mix(diffuseColor.rgb, vColor.rgb, overlayOpacity * strength * validSample);
+          lineOpacity *= overlayOpacity * strength;
+        }
+      #endif
+      // Isolines of the actual signed distance, not of RGB or mesh edges.
+      float band = abs(vHeatmapDistance) / (displayRange / ${CONTOUR_BANDS.toFixed(1)});
+      float edge = abs(fract(band + 0.5) - 0.5);
+      float width = max(fwidth(band), 0.0001);
+      float line = 1.0 - smoothstep(width * 0.25, width * 1.1, edge);
+      // No zero contour, no lines on missing samples or clipped extremes.
+      float inRange = step(0.5, band) * (1.0 - step(${(CONTOUR_BANDS + 0.001).toFixed(3)}, band));
+      shownColor = mix(shownColor, vec3(1.0), line * lineOpacity * contoursVisible * validSample * inRange);
+      diffuseColor.rgb = shownColor;
+    `);
+  };
+  material.needsUpdate = true;
+}
+
+async function addFaceTexture(data, mesh, baseUrl, requestId) {
+  const t = data.texture;
+  if (!t) return;
+  if (t.uv_file !== 'heatmap.uv.bin' || t.image_file !== 'heatmap.texture.png') throw new Error('Invalid face texture files');
+  const [uvResponse, imageResponse] = await Promise.all([t.uv_file, t.image_file].map(file =>
+    fetch(new URL(file, baseUrl), { cache: 'no-store' })));
+  if (!uvResponse.ok || !imageResponse.ok) throw new Error('Face texture is unavailable');
+  const [uvBytes, imageBytes] = await Promise.all([uvResponse.arrayBuffer(), imageResponse.arrayBuffer()]);
+  if (await hashBytes(uvBytes) !== t.uv_sha256 || await hashBytes(imageBytes) !== t.image_sha256)
+    throw new Error('Saved face texture files do not match this comparison');
+  if (requestId !== meshLoadId) return;
+  const oldGeo = mesh.geometry;
+  if (!oldGeo.index || oldGeo.index.count !== t.corner_count || uvBytes.byteLength !== t.corner_count * 8)
+    throw new Error('Face texture does not match the heatmap triangles');
+  const uv = new Float32Array(uvBytes);
+  if (!uv.every(Number.isFinite)) throw new Error('Invalid face texture coordinates');
+  const objectUrl = URL.createObjectURL(new Blob([imageBytes], { type: 'image/png' }));
+  let texture;
+  try { texture = await new THREE.TextureLoader().loadAsync(objectUrl); }
+  finally { URL.revokeObjectURL(objectUrl); }
+  if (requestId !== meshLoadId) { texture.dispose(); return; }
+  const geo = oldGeo.toNonIndexed();
+  geo.userData.sampleIndices = oldGeo.index.array.slice();
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  mesh.geometry = geo;
+  oldGeo.dispose();
+  texture.flipY = false; // Source UVs use image-space coordinates, v=0 at the top.
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  mesh.material.map = texture;
+  mesh.material.needsUpdate = true;
+  el('texture-controls').hidden = false;
+  updateOverlay();
+  updateHeatmapSensitivity();
+}
 
 function resize() {
   const w = host.clientWidth, h = host.clientHeight;
@@ -310,6 +505,12 @@ new ResizeObserver(resize).observe(host); resize();
 })();
 
 function clearMesh() {
+  heatmapData = null;
+  el('show-contours').disabled = true;
+  el('contour-spacing').hidden = true;
+  el('texture-controls').hidden = true;
+  el('sensitivity-note').textContent = 'Display only. Volumes and quality checks stay unchanged. Gray = no valid sample. Saved 2D map keeps its original colors and scale.';
+  showHeatmapControls(false);
   if (!meshObj) return;
   scene.remove(meshObj);
   meshObj.traverse(o => {
@@ -336,14 +537,17 @@ function loadModel(baseUrl, label) {
   loadGlb(glbs, baseUrl + '/mesh.ply' + bust, label);
 }
 
-function loadGlb(urls, fallbackUrl, label) {
+function loadGlb(urls, fallbackUrl, label, requestId = ++meshLoadId) {
+  showHeatmapControls(false);
   status('loading ' + label + ' …');
   const url = Array.isArray(urls) ? urls[0] : urls;
   const onErr = () => {
-    if (Array.isArray(urls) && urls.length > 1) loadGlb(urls.slice(1), fallbackUrl, label);
+    if (requestId !== meshLoadId) return;
+    if (Array.isArray(urls) && urls.length > 1) loadGlb(urls.slice(1), fallbackUrl, label, requestId);
     else loadPly(fallbackUrl, label);
   };
   new GLTFLoader().load(url, gltf => {
+    if (requestId !== meshLoadId) return;
     clearMesh();
     meshObj = gltf.scene;
     // Render the photo texture UNLIT (like the phone viewer's .constant): the
@@ -373,13 +577,21 @@ function loadGlb(urls, fallbackUrl, label) {
   }, undefined, onErr);
 }
 
-function loadPly(url, label) {
+async function loadPly(url, label, approximateScale = false, comparison = false) {
+  const requestId = ++meshLoadId;
+  showHeatmapControls(false);
   status('loading ' + label + ' …');
-  new PLYLoader().load(url, geo => {
+  try {
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) throw new Error(response.statusText);
+    const bytes = await response.arrayBuffer();
+    if (requestId !== meshLoadId) return;
+    const geo = new PLYLoader().parse(bytes);
     geo.computeVertexNormals();
     clearMesh();
     const hasColor = !!geo.attributes.color;
-    const mat = new THREE.MeshStandardMaterial({
+    const mat = comparison ? new THREE.MeshBasicMaterial({ vertexColors: hasColor,
+      side: THREE.DoubleSide, toneMapped: false }) : new THREE.MeshStandardMaterial({
       vertexColors: hasColor, color: hasColor ? 0xffffff : 0xb9a08c,
       roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide });
     meshObj = new THREE.Mesh(geo, mat);
@@ -388,7 +600,56 @@ function loadPly(url, label) {
     meshObj.position.set(-c.x, -c.y, -c.z);
     scene.add(meshObj);
     status(label);
-  }, undefined, err => status('failed to load mesh: ' + err));
+    if (!comparison) return;
+    heatmapApproximate = approximateScale;
+    showHeatmapControls(true);
+    el('heatmap-sensitivity').disabled = el('reset-sensitivity').disabled = true;
+    el('sensitivity-status').hidden = false;
+    el('sensitivity-status').textContent = 'Loading sensitivity data…';
+    updateHeatmapSensitivity();
+    try {
+      const dataUrl = new URL(url, location.href);
+      dataUrl.pathname = dataUrl.pathname.replace(/\.ply$/, '.display.json');
+      const dataResponse = await fetch(dataUrl, { cache: 'no-store' });
+      if (!dataResponse.ok) throw new Error('Display samples unavailable. Run Compare again to enable sensitivity for this saved result.');
+      const data = await dataResponse.json();
+      const hash = await hashBytes(bytes);
+      if (requestId !== meshLoadId) return;
+      if (!validateHeatmapData(data, geo.attributes.position.count, hash)) throw new Error('Display samples do not match');
+      heatmapData = data;
+      const displayPalette = referencePalette();
+      heatmapData.linearPalette = displayPalette.map(rgb => {
+        const c = new THREE.Color().setRGB(...rgb, THREE.SRGBColorSpace);
+        return [c.r, c.g, c.b];
+      });
+      if (!geo.attributes.color) geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(data.distances.length * 3), 3));
+      geo.setAttribute('heatmapDistance', new THREE.Float32BufferAttribute(data.distances.map(d => d ?? 0), 1));
+      geo.setAttribute('heatmapValid', new THREE.Float32BufferAttribute(data.distances.map(d => d === null ? 0 : 1), 1));
+      mat.vertexColors = true; mat.needsUpdate = true;
+      configureHeatmapMaterial(mat);
+      el('show-contours').disabled = false;
+      el('contour-spacing').hidden = false;
+      el('heatmap-sensitivity').disabled = el('reset-sensitivity').disabled = false;
+      el('sensitivity-status').hidden = true;
+      // Use the same palette in the legend as on the mesh.
+      updateLegend();
+      updateHeatmapSensitivity();
+      if (data.texture) {
+        try { await addFaceTexture(data, meshObj, new URL(url, location.href), requestId); }
+        catch (err) {
+          if (requestId !== meshLoadId) return;
+          el('sensitivity-status').hidden = false;
+          el('sensitivity-status').textContent = `Color map only: ${err.message}`;
+        }
+      }
+    } catch (err) {
+      if (requestId !== meshLoadId) return;
+      el('sensitivity-status').hidden = false;
+      el('sensitivity-status').textContent = `Heatmap controls unavailable: ${err.message}`;
+    }
+  } catch (err) {
+    if (requestId === meshLoadId) status('failed to load mesh: ' + err.message);
+  }
 }
 
 // ---------- data + UI ----------
@@ -409,18 +670,38 @@ async function refreshPatients() {
   await refreshSessions();
 }
 
+let sessionRefreshTimer = null;
+let comparisonOrigins = new Map(), comparisonRunning = false;
+function updateCompareButton() {
+  const before = el('before-select'), after = el('after-select');
+  el('run-compare').disabled = comparisonRunning || !before.value || !after.value ||
+    before.selectedOptions[0]?.disabled || after.selectedOptions[0]?.disabled ||
+    comparisonOrigins.get(before.value) === comparisonOrigins.get(after.value);
+}
 async function refreshSessions() {
+  clearTimeout(sessionRefreshTimer);
   const sessionsDiv = el('sessions'), beforeSel = el('before-select'),
         afterSel = el('after-select'), comparesDiv = el('compares');
+  const selectedBefore = beforeSel.value, selectedAfter = afterSel.value;
   sessionsDiv.innerHTML = beforeSel.innerHTML = afterSel.innerHTML =
     comparesDiv.innerHTML = '';
   if (!patientId) return;
 
   const sessions = await api(`/api/patients/${patientId}/sessions`);
+  comparisonOrigins = new Map(sessions.map(s => [s.id, s.capture_origin || s.source_session_id || s.id]));
   if (!sessions.length) {
     sessionsDiv.innerHTML = '<div class="empty">No captures yet for this patient.</div>';
   }
   for (const s of sessions) {
+    const busy = ['queued', 'processing'].includes(s.status);
+    const q = s.stats?.measurement_quality;
+    const photoOnly = !q && s.stats?.measurement_grade === false;
+    const ready = s.processed && !busy && s.status !== 'failed' &&
+      q?.version === 1 && q.eligible === true;
+    const previewReview = s.stats?.display_quality?.status === 'needs_review' || !!s.stats?.oc_error;
+    const badge = busy ? (s.status === 'queued' ? 'Queued' : 'Processing') :
+      s.status === 'failed' ? 'Failed' : !s.processed ? 'Pending' :
+      photoOnly ? 'Display only' : !q ? 'Unchecked' : !ready ? 'Quality warning' : previewReview ? 'Preview warning' : 'Checks passed';
     const d = document.createElement('div');
     const key = `s:${s.id}`;
     d.className = 'item' + (s.processed ? ' clickable' : '') + (activeKey === key ? ' active' : '');
@@ -433,8 +714,21 @@ async function refreshSessions() {
         <div class="lbl">${prettyDate(s.label)}</div>
         <div class="sub-id">${s.id}${s.patient_id ? ' · ' + s.patient_id : ''}</div>
       </div>
-      <div class="pill ${s.processed ? 'ok' : 'wait'}">${s.processed ? 'Processed' : 'Pending'}</div>`;
+      <div class="pill ${ready && !previewReview ? 'ok' : !busy && q && !ready ? 'bad' : 'wait'}">${badge}</div>`;
     d.appendChild(head);
+    if (s.processed && !busy) {
+      const note = document.createElement('div');
+      note.className = 'quality-note';
+      const messages = [];
+      if (photoOnly) messages.push('Photo-only capture; no depth mesh for volume comparison.');
+      else if (!q) messages.push('Measurement check unavailable. Refresh after processing finishes.');
+      else if (!ready) messages.push(...(q.reasons || ['Measurement checks failed.']));
+      if (previewReview) messages.push('Photo reconstruction failed; depth fallback preview.');
+      if (ready) messages.push(s.stats?.measurement_warning || 'Experimental only; real-patient accuracy unvalidated.');
+      if (s.status === 'failed' && s.error) messages.push(s.error);
+      note.textContent = messages.join(' ');
+      d.appendChild(note);
+    }
 
     if (s.processed) {
       d.onclick = () => { activeKey = key;
@@ -447,6 +741,7 @@ async function refreshSessions() {
     if (!s.processed) {
       const b = document.createElement('button');
       b.className = 'primary'; b.textContent = 'Process';
+      b.disabled = busy;
       b.onclick = async e => { e.stopPropagation(); b.disabled = true; b.textContent = 'processing…';
         const done = startProgress();
         try { await api(`/api/patients/${patientId}/sessions/${s.id}/process?wait=true`, { method: 'POST' });
@@ -467,6 +762,7 @@ async function refreshSessions() {
       // recomputed from the same raw depth.
       const rp = document.createElement('button');
       rp.textContent = 'Reprocess';
+      rp.disabled = busy;
       rp.onclick = async e => { e.stopPropagation(); rp.disabled = true;
         const prev = rp.textContent; rp.textContent = 'reprocessing…';
         const done = startProgress();
@@ -481,6 +777,7 @@ async function refreshSessions() {
     }
     const del = document.createElement('button');
     del.className = 'icon-btn danger'; del.title = 'Delete session'; del.textContent = '🗑';
+    del.disabled = busy;
     del.onclick = async e => { e.stopPropagation();
       if (!confirm(`Delete this session?\n\n${prettyDate(s.label)}\n\nThis removes the capture and any comparisons that used it. This cannot be undone.`)) return;
       del.disabled = true;
@@ -494,13 +791,26 @@ async function refreshSessions() {
     sessionsDiv.appendChild(d);
     for (const sel of [beforeSel, afterSel]) {
       const o = document.createElement('option');
-      o.value = s.id; o.textContent = prettyDate(s.label); o.disabled = !s.processed;
+      const experimental = el('experimental-compare').checked;
+      const photo = el('comparison-source').value === 'photo';
+      const experimentalReady = experimental && s.processed && !busy && s.status !== 'failed' &&
+        (photo ? s.photo_comparison_available : q?.version === 1 && !!q.mesh_sha256);
+      const unavailable = busy ? s.status : photoOnly ? 'no depth' : experimentalReady ? 'quality warning' : q ? 'quality blocked' : 'unchecked';
+      const selectable = experimental ? experimentalReady : ready;
+      const reason = experimental && photo ? (selectable ? 'photo model' : 'photo unavailable') : unavailable;
+      o.value = s.id; o.textContent = prettyDate(s.label) + (experimental && photo || !ready ? ` (${reason})` : ''); o.disabled = !selectable;
+      o.title = (q?.reasons || []).join(' ');
       sel.appendChild(o);
     }
   }
-  if (afterSel.options.length > 1) afterSel.selectedIndex = afterSel.options.length - 1;
+  const selectable = [...beforeSel.options].filter(o => !o.disabled).map(o => o.value);
+  beforeSel.value = selectable.includes(selectedBefore) ? selectedBefore : selectable[0] || '';
+  const different = selectable.filter(id => comparisonOrigins.get(id) !== comparisonOrigins.get(beforeSel.value));
+  afterSel.value = different.includes(selectedAfter) ? selectedAfter : different[different.length - 1] || '';
+  updateCompareButton();
 
   const compares = await api(`/api/patients/${patientId}/compares`);
+  compares.sort((a,b) => Number(b.source === 'photo') - Number(a.source === 'photo'));
   if (!compares.length) {
     comparesDiv.innerHTML = '<div class="empty">Run a comparison to see volume changes.</div>';
   }
@@ -509,6 +819,11 @@ async function refreshSessions() {
     const key = `c:${c.id}`;
     d.className = 'item clickable' + (activeKey === key ? ' active' : '');
     const net = c.net_significant_volume_ml;
+    const photo = c.source === 'photo';
+    const diagnostic = c.diagnostic_only === true;
+    const title = `${prettyDate(sessions.find(s => s.id === c.before)?.label || c.before)} → ${prettyDate(sessions.find(s => s.id === c.after)?.label || c.after)}`;
+    const safeTitle = title.replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    const checked = c.quality_checks?.version === 1;
     const cls = net >= 0 ? 'vol-pos' : 'vol-neg';
     const rows = (c.regions || []).map(r =>
       `<div class="${r.significant ? '' : 'insig'}" style="margin-top:3px">
@@ -516,18 +831,46 @@ async function refreshSessions() {
          <span class="muted">(peak ${r.peak_mm} mm${r.significant ? '' : ', below noise floor'})</span>
        </div>`).join('') || '<div class="muted">no change detected</div>';
     d.innerHTML = `
-      <div class="lbl" style="font-size:13px">${prettyDate(c.before)} → ${prettyDate(c.after)}</div>
-      <div style="margin-top:4px">net: <span class="${cls}">${net >= 0 ? '+' : ''}${net} mL</span></div>
-      ${rows}
+      <div class="lbl" style="font-size:13px">${safeTitle}</div>
+      <div class="quality-note">${photo ? 'PHOTO COMPARISON: inner-eye scaling and unchanged upper-face alignment. Research only.' : diagnostic ? 'DEPTH DIAGNOSTIC. No cc estimate. Colors include scan and alignment errors.' : checked ? 'Experimental estimate; not clinically validated.' : 'Historical result: no current quality checks. Do not interpret as a validated volume.'}</div>
+      ${photo || diagnostic ? '' : `<div style="margin-top:4px">net: <span class="${cls}">${net >= 0 ? '+' : ''}${net} mL</span></div>${rows}`}
       <div class="muted" style="margin-top:8px">click to view heatmap ·
         <a href="/files/${patientId}/compares/${c.id}/heatmap.png" target="_blank"
            style="color:var(--accent)">2D map</a></div>`;
+    if (diagnostic || photo) {
+      const warning = document.createElement('div');
+      warning.className = 'quality-note';
+      warning.textContent = (c.quality_checks?.warnings || []).join(' ');
+      d.appendChild(warning);
+    }
+    if (photo) {
+      const info = document.createElement('div');
+      info.className = 'quality-note';
+      const icd = c.calibration?.measured_intercanthal_mm;
+      info.textContent = icd ? `Calibrated to entered inner-eye distance: ${icd} mm. Exploratory patch differences, not a validated treatment volume.` : 'Relative scale only. A directly measured inner-eye distance and complete patch coverage are required for cc.';
+      d.appendChild(info);
+      if (!icd) for (const r of c.regional_coverage || []) {
+        const row = document.createElement('div');
+        row.className = 'quality-note';
+        row.textContent = `${r.label}: ${(r.coverage*100).toFixed(1)}% surface coverage${r.coverage < 1 ? '; full-patch volume unavailable' : ''}.`;
+        d.appendChild(row);
+      }
+      for (const r of c.regional_volumes || []) {
+        const row = document.createElement('div');
+        row.className = 'quality-note';
+        row.textContent = `${r.label}: ${r.volume_ml == null ? 'volume unavailable' : `${r.volume_ml > 0 ? '+' : ''}${r.volume_ml} cc`} (${Math.round(r.coverage*100)}% coverage). ${r.warning}`;
+        d.appendChild(row);
+      }
+    }
     d.onclick = () => { activeKey = key;
       loadPly(`/files/${patientId}/compares/${c.id}/heatmap.ply`,
-              `compare · ${prettyDate(c.before)} → ${prettyDate(c.after)}`);
+              `${photo ? 'PHOTO, research only' : diagnostic ? 'DEPTH DIAGNOSTIC, no cc' : 'compare'} · ${title}`,
+              photo && !c.calibration?.measured_intercanthal_mm, true);
       refreshSessions(); };
     comparesDiv.appendChild(d);
   }
+  if (sessions.some(s => ['queued', 'processing'].includes(s.status)))
+    sessionRefreshTimer = setTimeout(() => refreshSessions().catch(err => status(err.message)), 5000);
 }
 
 el('add-patient').onclick = async () => {
@@ -540,19 +883,53 @@ el('add-patient').onclick = async () => {
 };
 el('new-patient-name').addEventListener('keydown', e => { if (e.key === 'Enter') el('add-patient').click(); });
 el('patient-select').onchange = async e => { patientId = e.target.value; activeKey = null;
+  el('intercanthal-mm').value = '';
   await refreshSessions(); };
 el('run-compare').onclick = async () => {
+  if (el('experimental-compare').checked && el('comparison-source').value === 'photo' && !el('intercanthal-mm').reportValidity()) return;
   const before = el('before-select').value, after = el('after-select').value;
+  const comparePatient = patientId;
+  const compareLabel = `${el('before-select').selectedOptions[0]?.textContent} → ${el('after-select').selectedOptions[0]?.textContent}`;
   if (!before || !after || before === after) { alert('Pick two different sessions to compare.'); return; }
+  if (comparisonOrigins.get(before) === comparisonOrigins.get(after)) {
+    alert('Choose two independently captured scans, not copies of the same capture.'); return;
+  }
+  comparisonRunning = true;
+  el('experimental-compare').disabled = true;
+  el('comparison-source').disabled = el('intercanthal-mm').disabled = true;
   const btn = el('run-compare'); btn.disabled = true; btn.textContent = 'comparing…';
   try {
-    await api(`/api/patients/${patientId}/compare`, { method: 'POST',
+    const result = await api(`/api/patients/${comparePatient}/compare`, { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ before, after }) });
-    await refreshSessions();
+      body: JSON.stringify({ before, after, experimental: el('experimental-compare').checked,
+        source: el('experimental-compare').checked ? el('comparison-source').value : 'depth',
+        intercanthal_mm: el('experimental-compare').checked && el('comparison-source').value === 'photo' && el('intercanthal-mm').value ? Number(el('intercanthal-mm').value) : null }) });
+    if (patientId === comparePatient) {
+      activeKey = `c:${result.id}`;
+      loadPly(`/files/${comparePatient}/compares/${result.id}/heatmap.ply`,
+              `${result.source === 'photo' ? 'PHOTO, research only' : result.diagnostic_only ? 'DEPTH DIAGNOSTIC, no cc' : 'compare'} · ${compareLabel}`,
+              result.source === 'photo' && !result.calibration?.measured_intercanthal_mm, true);
+      await refreshSessions();
+    }
   } catch (err) { alert(err.message); }
-  btn.disabled = false; btn.textContent = 'Compare';
+  comparisonRunning = false;
+  el('experimental-compare').disabled = false;
+  el('comparison-source').disabled = el('intercanthal-mm').disabled = false;
+  updateCompareButton();
+  btn.textContent = 'Compare';
 };
+el('before-select').onchange = updateCompareButton;
+el('after-select').onchange = updateCompareButton;
+async function updateExperimentalMode() {
+  const experimental = el('experimental-compare').checked;
+  const photo = el('comparison-source').value === 'photo';
+  el('experimental-note').hidden = el('experimental-options').hidden = !experimental;
+  el('intercanthal-label').style.display = photo ? 'block' : 'none';
+  el('experimental-note').textContent = photo ? 'Uses the retained photo surfaces, not the damaged depth shell. Matches inner-eye distance and aligns the unchanged upper face. Enter an actual measured distance for exploratory cc; otherwise relative scale only. Not clinically validated.' : 'Shows raw depth-surface discrepancies, including scan and alignment errors. No cc estimate or intercanthal scaling.';
+  await refreshSessions();
+}
+el('experimental-compare').onchange = updateExperimentalMode;
+el('comparison-source').onchange = updateExperimentalMode;
 
 refreshPatients().catch(err => status(err.message));
 </script>

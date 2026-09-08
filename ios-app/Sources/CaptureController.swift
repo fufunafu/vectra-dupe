@@ -44,9 +44,9 @@ struct ColorFrameCapture {
 /// yaw the state machine sees is nevertheless "+ = subject's right").
 final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     enum Pose: Int, CaseIterable {
-        // Nine depth keyframes covering wider arcs than the original five:
+        // Seven depth keyframes covering wider arcs than the original five:
         // front + a 3/4 view and a near-profile each side, then chin-up/down
-        // (camera above/below) and a near-ear view each side. This is the
+        // (camera above/below). This is the
         // BOUNDED set that drives geometry — it goes through ICP + TSDF, whose
         // cost grows ~O(n²), so it stays small. Dense colour is harvested
         // separately in the free-orbit phase (see Phase.orbiting). (`front`
@@ -60,34 +60,27 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         // we keep going on the LOCKED face frame (last good face transform) +
         // ARKit world tracking of the camera, which stays valid with no face.
         case front = 0, leftHalf, left, rightHalf, right,
-             brow, jaw, earLeft, earRight
+             brow, jaw
         var name: String {
             ["front", "left_half", "left", "right_half", "right",
-             "brow", "jaw", "ear_left", "ear_right"][rawValue]
+             "brow", "jaw"][rawValue]
         }
         /// Camera yaw around the face, degrees (camera position seen from the
         /// face frame). The near-profiles sit at ±72° rather than a full 90° so
-        /// they still share enough surface with the 3/4 view for ICP to chain;
-        /// the ear views reach ±80°. Order matches vectra3d POSE_NAMES.
+        /// they still share enough surface with the 3/4 view for ICP to chain.
+        /// Order matches the first seven entries of vectra3d POSE_NAMES.
         var targetYawDeg: Float {
-            [0, -35, -72, 35, 72, 0, 0, -80, 80][rawValue]
+            [0, -35, -72, 35, 72, 0, 0][rawValue]
         }
         /// Camera ELEVATION around the face, degrees (above = +). brow looks
         /// down from above the eye line; jaw looks up from below. The rest are
         /// captured roughly level.
         var targetPitchDeg: Float {
-            [0, 0, 0, 0, 0, 30, -30, 0, 0][rawValue]
+            [0, 0, 0, 0, 0, 30, -30][rawValue]
         }
         /// True once the camera is past where ARKit can still track the face, so
         /// the capture relies on the locked face frame instead of a live anchor.
         var needsLockedFrame: Bool { abs(targetYawDeg) > 40 }
-        /// Extra yaw tolerance for the ear views: they're captured blind on the
-        /// dead-reckoned frame at ±80°, where hunting a ±12° window one-handed
-        /// is maddening — and their depth adds the least (the orbit photos
-        /// cover ears photogrammetrically). Field-tested pain point.
-        var yawTolBonusDeg: Float {
-            self == .earLeft || self == .earRight ? 6 : 0
-        }
         var instruction: String {
             switch self {
             case .front: return "Ask the subject to face the camera and hold still"
@@ -97,8 +90,6 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
             case .right: return "Keep going RIGHT for a side profile"
             case .brow: return "Raise the phone above their eye line"
             case .jaw: return "Lower the phone below their chin"
-            case .earLeft: return "Move the phone past their LEFT ear"
-            case .earRight: return "Move the phone past their RIGHT ear"
             }
         }
     }
@@ -310,7 +301,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         statusText = "Frame the subject, then tap Start"
     }
 
-    /// Begin the guided nine-pose capture for the given patient. Called after the
+    /// Begin the guided seven-pose capture for the given patient. Called after the
     /// operator taps Start and enters a patient ID. Reuses the already-running
     /// preview session.
     func beginGuidedCapture(patientId: String) {
@@ -380,7 +371,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - Demo mode (no camera)
 
     /// Runs the guided-capture experience without a camera:
-    /// scripts the alignment/hold/capture animation through the nine poses,
+    /// scripts the alignment/hold/capture animation through the seven poses,
     /// then writes a synthetic head session so the result shows up — and can
     /// be uploaded — just like a real capture. Lets the app be explored on the
     /// Simulator or any device without a front depth camera.
@@ -549,7 +540,7 @@ final class CaptureController: NSObject, ObservableObject, ARSessionDelegate {
         // profile poses a looser "Level" gate so it's actually reachable; the
         // small residual pitch is well within what the server fuse tolerates.
         let pitchTol = pose.needsLockedFrame ? pitchTolDeg + 5 : pitchTolDeg
-        let yawTol = yawTolDeg + pose.yawTolBonusDeg + huntRelaxDeg(for: pose)
+        let yawTol = yawTolDeg + huntRelaxDeg(for: pose)
         let angleOK = abs(yaw - pose.targetYawDeg) < yawTol
         let aligned = angleOK
             && abs(pitch - pose.targetPitchDeg) < pitchTol

@@ -2,7 +2,7 @@
 
 SwiftUI + ARKit app for scanning another person's face with the rear camera.
 The subject holds their head still while the operator moves the phone through
-nine guided positions, then captures overlapping photos during a free orbit.
+seven guided positions, then captures overlapping photos during a free orbit.
 Operator capture is the only camera workflow.
 
 ## Build
@@ -21,7 +21,7 @@ open VectraCapture.xcodeproj # select your signing team, then run on device
 
 - ARKit world tracking records camera movement. Vision detects the subject's
   face to establish a head frame, which freezes after the front capture.
-- The nine positions cover the front, obliques, profiles, brow, jaw, and ears.
+- The seven positions cover the front, obliques, profiles, brow, and jaw.
   A position captures after a stable hold with angle, distance, and level gates.
   Ask the subject to maintain a neutral expression; the rear camera does not
   provide ARKit face blend shapes for automatic expression checks.
@@ -38,7 +38,7 @@ open VectraCapture.xcodeproj # select your signing team, then run on device
    `http://192.168.1.20:8008`) and configure the server patient.
 2. In Capture, frame the subject with the rear camera, tap Start capture, and
    enter the capture's patient ID.
-3. Follow the nine positions, then sweep around the face and finish the scan.
+3. Follow the seven positions, then sweep around the face and finish the scan.
 4. In Sessions, export the scan or upload it for server reconstruction.
    Depth captures also support an immediate on-device 3D preview. Photo-only
    captures require server reconstruction before they can be viewed in 3D.
@@ -73,7 +73,7 @@ yaw needs no flip. What still needs a person holding the phone:
    the surface is thick or holed.
 
 Fast null test (< 0.3 mL acceptance): same subject, lips closed, hair back,
-two back-to-back captures with the subject not moving between them. Nine
+two back-to-back captures with the subject not moving between them. Seven
 poses in under a minute, then tap "Finish & save scan" after a short sweep
 rather than filling the coverage grid. Upload both to the same server
 patient, process, and compare in the viewer; the phantom volume after the

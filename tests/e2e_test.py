@@ -80,7 +80,10 @@ def main():
         cwd=os.path.join(ROOT, "server"), env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        for _ in range(50):
+        # A cold Matplotlib/Open3D import can exceed ten seconds on this Mac.
+        for _ in range(300):
+            if server.poll() is not None:
+                raise RuntimeError(f"server exited during startup ({server.returncode})")
             try:
                 requests.get(f"{BASE}/api/patients", timeout=1)
                 break
@@ -118,10 +121,14 @@ def main():
         null_sig = [r for r in null_result["regions"] if r["significant"]]
         if null_sig:
             failures.append(f"null compare reported significant regions: {null_sig}")
+        for result in (bump_result, null_result):
+            if not result.get("quality_checks", {}).get("version"):
+                failures.append("comparison did not record measurement quality checks")
 
         cmp_id = bump_result["id"]
         for rel in (f"{pid}/sessions/{sids['before']}/mesh.ply",
                     f"{pid}/compares/{cmp_id}/heatmap.ply",
+                    f"{pid}/compares/{cmp_id}/heatmap.display.json",
                     f"{pid}/compares/{cmp_id}/heatmap.png",
                     f"{pid}/compares/{cmp_id}/result.json"):
             if requests.get(f"{BASE}/files/{rel}").status_code != 200:

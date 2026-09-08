@@ -7,12 +7,13 @@ Run:  ../.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8008
 import json
 import os
 import time
+from typing import Literal
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import processing
 import store
@@ -44,6 +45,9 @@ class SessionIn(BaseModel):
 class CompareIn(BaseModel):
     before: str
     after: str
+    experimental: bool = False
+    source: Literal["depth", "photo"] = "depth"
+    intercanthal_mm: float | None = Field(default=None, gt=0, lt=100, allow_inf_nan=False)
 
 
 @app.get("/api/patients")
@@ -59,7 +63,9 @@ def post_patient(body: PatientIn):
 @app.get("/api/patients/{pid}/sessions")
 def get_sessions(pid: str):
     try:
-        return store.list_sessions(pid)
+        return [{**processing.session_with_quality(store.session_dir(pid, meta["id"]), meta),
+                 "capture_origin": store.capture_origin(pid, meta["id"])}
+                for meta in store.list_sessions(pid)]
     except KeyError as e:
         raise HTTPException(404, str(e))
 
@@ -101,7 +107,8 @@ def delete_session(pid: str, sid: str):
 @app.get("/api/patients/{pid}/sessions/{sid}")
 def get_session(pid: str, sid: str):
     try:
-        return store.get_session_meta(pid, sid)
+        return processing.session_with_quality(store.session_dir(pid, sid),
+                                                store.get_session_meta(pid, sid))
     except KeyError as e:
         raise HTTPException(404, str(e))
 
@@ -159,11 +166,32 @@ def process_session(pid: str, sid: str, mode: str = "both", wait: bool = False):
 
 @app.post("/api/patients/{pid}/compare")
 def compare(pid: str, body: CompareIn):
+    if body.before == body.after:
+        raise HTTPException(400, "Pick two different sessions to compare.")
+    if body.source == "photo" and not body.experimental:
+        raise HTTPException(400, "Photo comparison requires explicit experimental mode.")
     try:
-        before_mesh = os.path.join(store.session_dir(pid, body.before), "mesh.ply")
-        after_mesh = os.path.join(store.session_dir(pid, body.after), "mesh.ply")
+        if store.capture_origin(pid, body.before) == store.capture_origin(pid, body.after):
+            raise HTTPException(400, "These sessions are copies of the same capture. "
+                                      "Choose two independently captured scans.")
+        directories = [store.session_dir(pid, sid) for sid in (body.before, body.after)]
+        if body.source == "photo":
+            from vectra3d import photo_compare
+            assets = [processing.require_session_photo(directory,store.get_session_meta(pid,sid))
+                      for sid,directory in zip((body.before,body.after),directories)]
+            out_dir = store.compare_dir(pid,body.before,body.after,source="photo")
+            summary = photo_compare.compare_assets(*assets,out_dir,body.intercanthal_mm)
+            return {"before":body.before,"after":body.after,"id":os.path.basename(out_dir),**summary}
+        for sid, directory in zip((body.before, body.after), directories):
+            processing.require_session_measurement(directory, store.get_session_meta(pid, sid),
+                                                   experimental=body.experimental)
+        before_mesh, after_mesh = [os.path.join(d, "mesh.ply") for d in directories]
     except KeyError as e:
         raise HTTPException(404, str(e))
+    except processing.quality.QualityError as e:
+        raise HTTPException(422, str(e))
+    except (RuntimeError, OSError, ValueError) as e:
+        raise HTTPException(422, f"Comparison could not be completed: {e}")
     for path, sid in ((before_mesh, body.before), (after_mesh, body.after)):
         if not os.path.exists(path):
             # A photo-only (rear, no-LiDAR) session processes fine but never
@@ -178,13 +206,16 @@ def compare(pid: str, body: CompareIn):
             except (OSError, json.JSONDecodeError):
                 pass
             raise HTTPException(400, detail)
-    out_dir = store.compare_dir(pid, body.before, body.after)
+    out_dir = store.compare_dir(pid, body.before, body.after, experimental=body.experimental)
     try:
-        summary = processing.compare_sessions_on_disk(before_mesh, after_mesh, out_dir)
+        summary = processing.compare_sessions_on_disk(before_mesh, after_mesh, out_dir,
+                                                      experimental=body.experimental)
+    except processing.quality.QualityError as e:
+        raise HTTPException(422, str(e))
     except Exception as e:
         raise HTTPException(500, f"comparison failed: {e}")
     return {"before": body.before, "after": body.after,
-            "id": f"{body.before}__{body.after}", **summary}
+            "id": os.path.basename(out_dir), **summary}
 
 
 @app.get("/api/patients/{pid}/compares")

@@ -206,19 +206,25 @@ def _sample_albedo(tri_uv: np.ndarray, F: np.ndarray, n_verts: int,
 # Landmark-anchored metric alignment
 # --------------------------------------------------------------------------- #
 
-def _detect_landmarks(image_path: str) -> dict | None:
+def _detect_landmarks(image_path: str, *, search: bool = False) -> dict | None:
     """Run the MediaPipe CLI on an image -> its JSON dict (or None)."""
     try:
-        proc = subprocess.run([MP_PYTHON, LANDMARK_SCRIPT, image_path],
+        command = [MP_PYTHON, LANDMARK_SCRIPT, image_path]
+        if search:
+            command.append("--search")
+        else:
+            command.append("--whole-image-only")
+        proc = subprocess.run(command,
                               capture_output=True, text=True, timeout=120)
-    except (subprocess.SubprocessError, OSError):
-        return None
+    except (subprocess.SubprocessError, OSError) as exc:
+        raise RuntimeError(f"Landmark detector could not run: {exc}") from exc
     if proc.returncode != 0 or not proc.stdout.strip():
-        return None
+        tail = "\n".join((proc.stderr or "").splitlines()[-4:])
+        raise RuntimeError(f"Landmark detector failed (exit {proc.returncode}): {tail}")
     try:
         d = json.loads(proc.stdout.strip().splitlines()[-1])
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Landmark detector returned invalid JSON") from exc
     return d if d.get("ok") else None
 
 
@@ -322,13 +328,32 @@ def _render_textured(Vor: np.ndarray, F: np.ndarray, tri_uv: np.ndarray,
             hit.reshape(size, size))
 
 
-def _oc_landmarks(V, F, tri_uv, albedo, work_dir):
+def _landmark_view_rotations(axes, up_axis=0):
+    """Proper rotations, with each remaining PCA axis tried as the face axis."""
+    for face_axis in range(3):
+        if face_axis == up_axis:
+            continue
+        for fsign in (1.0, -1.0):
+            for usign in (1.0, -1.0):
+                zc = axes[:, face_axis] * fsign
+                zc /= np.linalg.norm(zc)
+                up = axes[:, up_axis] * usign
+                yc = up - np.dot(up, zc) * zc
+                yc /= np.linalg.norm(yc)
+                xc = np.cross(yc, zc)
+                yield np.stack([xc, yc, zc], axis=1)
+
+
+def _oc_landmarks(V, F, tri_uv, albedo, work_dir, diagnostics=None):
     """3D landmarks on the OBJ in a normalized, roughly-oriented frame.
 
-    The OBJ frame is arbitrary, so we try the PCA axes (4th/8 sign+face combos)
-    as the facing direction and keep the render MediaPipe detects the largest
-    face in. Returns (ocL (478,3), valid (478,), N4 4x4 mapping original OBJ
-    verts -> the rendered frame, render_img) or None."""
+    First try the original eight PCA views. A reconstruction can include the
+    torso and background, shrinking the face below whole-image detection size
+    and making the longest axis unrelated to upright. On failure, render at
+    higher resolution, search overlapping image crops, and try the other up
+    axes. Pixel coordinates always refer to the full render for ray lookup.
+    Returns (ocL, valid, N4, render_img) or None.
+    """
     center = (V.max(0) + V.min(0)) / 2.0
     ext = float((V.max(0) - V.min(0)).max())
     Vn = (V - center) / ext
@@ -338,31 +363,33 @@ def _oc_landmarks(V, F, tri_uv, albedo, work_dir):
 
     best = None
     render_path = os.path.join(work_dir, "oc_render.png")
-    for face_axis in (1, 2):                           # axis 0 is the tall (up) axis
-        for fsign in (1.0, -1.0):
-            for usign in (1.0, -1.0):
-                zc = axes[:, face_axis] * fsign
-                zc /= np.linalg.norm(zc)
-                up = axes[:, 0] * usign
-                yc = up - np.dot(up, zc) * zc
-                yc /= np.linalg.norm(yc)
-                xc = np.cross(yc, zc)
-                Rwc = np.stack([xc, yc, zc], axis=1)  # rows->new axes
+    for size, search in ((512, False), (1024, True)):
+        for up_axis in ((0,) if not search else (0, 1, 2)):
+            for Rwc in _landmark_view_rotations(axes, up_axis):
                 Vor = Vn @ Rwc
-                img, hitpos, hit = _render_textured(Vor, F, tri_uv, albedo)
+                img, hitpos, hit = _render_textured(Vor, F, tri_uv, albedo, size=size)
                 o3d.io.write_image(render_path, o3d.geometry.Image(
                     np.ascontiguousarray(img)))
-                lmk = _detect_landmarks(render_path)
+                lmk = _detect_landmarks(render_path, search=search)
                 if lmk is None or len(lmk.get("landmarks", [])) != 478:
                     continue
                 pts = np.asarray(lmk["landmarks"])
                 area = float(np.ptp(pts[:, 0]) * np.ptp(pts[:, 1]))
                 if best is None or area > best[0]:
                     best = (area, Rwc, center, ext, hitpos, hit, pts, img)
+            if best is not None:
+                if diagnostics is not None:
+                    diagnostics.update(landmark_render_size=size,
+                                       landmark_tiled_search=search,
+                                       landmark_up_axis=up_axis)
+                break
+        if best is not None:
+            break
 
     if best is None:
         return None
     _, Rwc, center, ext, hitpos, hit, pts, img = best
+    o3d.io.write_image(render_path, o3d.geometry.Image(np.ascontiguousarray(img)))
     iu = np.clip(np.round(pts[:, 0]).astype(int), 0, hit.shape[1] - 1)
     iv = np.clip(np.round(pts[:, 1]).astype(int), 0, hit.shape[0] - 1)
     ocL = hitpos[iv, iu]
@@ -500,7 +527,8 @@ def reconstruct_metric(raw_dir: str, poses: list[PoseCapture],
 def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
                              color_frames: list[ColorFrame], out_dir: str,
                              diag: dict | None = None,
-                             extrinsics: "list[np.ndarray] | None" = None) -> OCResult:
+                             extrinsics: "list[np.ndarray] | None" = None,
+                             cached_obj_path: str | None = None) -> OCResult:
     """One Object Capture reconstruction + metric alignment. Raises on any failure
     or guard violation. `diag` (if given) is filled with every intermediate metric
     as it is computed, so a failed attempt still reports how far it got and by how
@@ -519,7 +547,20 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
         if n_img < 8:
             raise RuntimeError(f"too few photos for photogrammetry ({n_img})")
         out_obj = os.path.join(work, "model.obj")
-        run_info = _run_ocrecon(work, out_obj)
+        if cached_obj_path is None:
+            run_info = _run_ocrecon(work, out_obj)
+        else:
+            # Internal recovery path for a retained OBJ from this same capture.
+            # Only display reconstruction is reused; every metric guard below
+            # still runs and the measurement mesh is never replaced with OC.
+            shutil.copy2(cached_obj_path, out_obj)
+            shutil.copy2(os.path.splitext(cached_obj_path)[0] + ".mtl",
+                         os.path.join(work, "model.mtl"))
+            for texture in glob.glob(os.path.join(os.path.dirname(cached_obj_path),
+                                                  "*_diffuseColor.png")):
+                shutil.copy2(texture, os.path.join(work, os.path.basename(texture)))
+            run_info = {}
+            diag["reused_retained_obj"] = True
         diag["oc_seconds"] = run_info.get("seconds")
 
         V, F, tri_uv, albedo = _load_obj_with_texture(out_obj)
@@ -530,7 +571,7 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
             raise RuntimeError("ocrecon mesh has no texture for landmark alignment")
 
         # 1) landmarks on the OBJ (its own frame) and on the metric depth views.
-        oc = _oc_landmarks(V, F, tri_uv, albedo, work)
+        oc = _oc_landmarks(V, F, tri_uv, albedo, work, diagnostics=diag)
         if oc is None:
             raise RuntimeError("no face detected in any OBJ render")
         ocL, ocOK, N4, _ = oc
@@ -585,6 +626,8 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
             "align_correspondences": n_inl,
             "align_ipd_mm": round(ipd, 2),
             "align_method": "landmark_umeyama",
+            "landmark_render_size": diag.get("landmark_render_size"),
+            "landmark_tiled_search": diag.get("landmark_tiled_search", False),
         }
         return OCResult(mesh=mesh, textured=textured, stats=stats,
                         face_landmarks=worldL[ocOK])
@@ -592,7 +635,12 @@ def _reconstruct_metric_once(raw_dir: str, poses: list[PoseCapture],
         if debug:
             dbg = os.path.join(out_dir, "oc_debug")
             os.makedirs(dbg, exist_ok=True)
-            for fn in ("oc_render.png", "model.obj", "model.mtl"):
+            # Preserve the texture too: an OBJ/MTL without its diffuse image
+            # cannot reproduce the landmark-render failure for diagnosis.
+            names = ["oc_render.png", "model.obj", "model.mtl"]
+            names += [os.path.basename(p) for p in glob.glob(
+                os.path.join(work, "*_diffuseColor.png"))]
+            for fn in names:
                 p = os.path.join(work, fn)
                 if os.path.isfile(p):
                     shutil.copy2(p, os.path.join(dbg, fn))

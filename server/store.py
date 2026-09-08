@@ -95,6 +95,25 @@ def get_session_meta(pid: str, sid: str) -> dict:
         return json.load(f)
 
 
+def capture_origin(pid: str, sid: str) -> str:
+    """Copies are processing variants of one capture, not independent scans."""
+    visited = set()
+    while sid not in visited:
+        visited.add(sid)
+        try:
+            parent = get_session_meta(pid, sid).get("source_session_id")
+        except KeyError:
+            if len(visited) == 1:
+                raise
+            # A retained copy can outlive its original. The deleted ancestor's
+            # identifier still identifies the shared capture family.
+            return sid
+        if not parent:
+            return sid
+        sid = parent
+    raise ValueError("Session copy ancestry contains a cycle")
+
+
 def update_session_meta(pid: str, sid: str, **updates) -> dict:
     sdir = session_dir(pid, sid)
     with open(os.path.join(sdir, "meta.json")) as f:
@@ -123,13 +142,15 @@ def delete_session(pid: str, sid: str) -> None:
     compares_root = os.path.join(patient_dir(pid), "compares")
     if os.path.isdir(compares_root):
         for name in os.listdir(compares_root):
-            before, _, after = name.partition("__")
+            before, _, after = name.removesuffix("__experimental").removesuffix("__photo").partition("__")
             if sid in (before, after):
                 shutil.rmtree(os.path.join(compares_root, name), ignore_errors=True)
 
 
-def compare_dir(pid: str, before_sid: str, after_sid: str) -> str:
-    return os.path.join(patient_dir(pid), "compares", f"{before_sid}__{after_sid}")
+def compare_dir(pid: str, before_sid: str, after_sid: str, *, experimental: bool = False,
+                source: str = "depth") -> str:
+    suffix = "__photo" if source == "photo" else "__experimental" if experimental else ""
+    return os.path.join(patient_dir(pid), "compares", f"{before_sid}__{after_sid}{suffix}")
 
 
 def list_compares(pid: str) -> list[dict]:
@@ -139,7 +160,7 @@ def list_compares(pid: str) -> list[dict]:
         for name in sorted(os.listdir(root)):
             result_path = os.path.join(root, name, "result.json")
             if os.path.exists(result_path):
-                before_sid, _, after_sid = name.partition("__")
+                before_sid, _, after_sid = name.removesuffix("__experimental").removesuffix("__photo").partition("__")
                 with open(result_path) as f:
                     results.append({"before": before_sid, "after": after_sid,
                                     "id": name, **json.load(f)})

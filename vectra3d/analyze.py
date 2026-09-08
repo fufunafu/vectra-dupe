@@ -6,6 +6,9 @@ Volume = sum(distance_i * vertex_area_i) over the region of interest.
 """
 
 from dataclasses import dataclass
+import hashlib
+import json
+from pathlib import Path
 
 import matplotlib
 
@@ -148,18 +151,40 @@ def rms_distance_mm(field: DistanceField, exclude_center=None,
 
 
 def save_colored_mesh(before: o3d.geometry.TriangleMesh, field: DistanceField,
-                      path: str, vmax_mm: float = 2.5) -> None:
+                      path: str, vmax_mm: float = 2.5, *, texture: dict | None = None) -> None:
     cmap = plt.get_cmap("RdBu_r")
     norm = np.clip((np.nan_to_num(field.distances) + vmax_mm) / (2 * vmax_mm), 0, 1)
     colors = cmap(norm)[:, :3]
     colors[~np.isfinite(field.distances)] = 0.55
     out = o3d.geometry.TriangleMesh(before)
     out.vertex_colors = o3d.utility.Vector3dVector(colors)
-    o3d.io.write_triangle_mesh(path, out)
+    if not o3d.io.write_triangle_mesh(path, out):
+        raise RuntimeError(f"Could not save heatmap mesh: {path}")
+    save_heatmap_data(field, path, vmax_mm, texture=texture)
+
+
+def save_heatmap_data(field: DistanceField, mesh_path: str, vmax_mm: float = 2.5,
+                      *, texture: dict | None = None) -> None:
+    """Keep unclipped scalar samples for display-only sensitivity adjustment.
+
+    Bind samples to the exact PLY so stale data cannot recolor another mesh.
+    Missing samples remain null, never a zero change. No measurement is altered.
+    """
+    path = Path(mesh_path)
+    payload = {
+        "version": 1,
+        "mesh_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "default_range": vmax_mm,
+        "distances": [float(d) if np.isfinite(d) else None for d in field.distances],
+        "palette": plt.get_cmap("RdBu_r")(np.linspace(0, 1, 256))[:, :3].tolist(),
+    }
+    if texture is not None:
+        payload['texture'] = texture
+    path.with_suffix(".display.json").write_text(json.dumps(payload, allow_nan=False))
 
 
 def save_heatmap_png(field: DistanceField, path: str, title: str,
-                     vmax_mm: float = 2.5) -> None:
+                     vmax_mm: float = 2.5, *, colorbar_label: str = "surface change (mm)") -> None:
     """Front-view (x up-screen-right, y up) orthographic heatmap."""
     front = field.vertices[:, 2] > 0  # face looks along +z
     v = field.vertices[front]
@@ -171,7 +196,7 @@ def save_heatmap_png(field: DistanceField, path: str, title: str,
     ax.set_title(title)
     ax.set_xlabel("x (mm)")
     ax.set_ylabel("y (mm)")
-    fig.colorbar(sc, ax=ax, label="surface change (mm)")
+    fig.colorbar(sc, ax=ax, label=colorbar_label)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
