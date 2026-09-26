@@ -14,6 +14,9 @@ means files were produced, not that facial accuracy was validated.
 Choose the download matching your computer from the artifacts on the
 [desktop build page](https://github.com/fufunafu/vectra-dupe/actions/workflows/desktop.yml).
 GitHub may require sign-in to download build artifacts. These are preview builds.
+The existing public artifacts predate video support. Version 0.2.0 video support
+has a local Apple Silicon package; its Windows, Intel Mac, and Linux package
+checks are pending publication of the prepared CI branch.
 
 Extract both the downloaded artifact ZIP and the archive inside it. Keep the
 entire `faceMap-Desktop` folder together, including `_internal`.
@@ -28,7 +31,7 @@ first-run engine download is needed. They are unsigned previews, so the OS may
 show an unfamiliar-publisher prompt or block launch. Do not disable system
 security to run them. Source installation below remains available.
 
-Packaged builds are tested on Windows Server 2025 x64, Ubuntu 22.04 x64,
+The earlier scan-only packaged builds were tested on Windows Server 2025 x64, Ubuntu 22.04 x64,
 and macOS 15 on both Mac architectures. Older operating systems are not
 verified by these builds. Windows 10/11 compatibility remains a target rather
 than a completed test on those desktop editions.
