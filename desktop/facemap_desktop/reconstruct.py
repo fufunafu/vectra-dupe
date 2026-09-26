@@ -208,12 +208,22 @@ def _clean_mesh(mesh, settings):
     mesh.remove_unreferenced_vertices()
     if len(mesh.triangles) > settings.max_triangles:
         mesh = mesh.simplify_quadric_decimation(settings.max_triangles)
+    mesh.remove_degenerate_triangles()
+    mesh.remove_duplicated_triangles()
+    mesh.remove_unreferenced_vertices()
+    if not np.isfinite(np.asarray(mesh.vertices)).all():
+        raise CaptureError('Surface reconstruction produced invalid coordinates. Try Quick mode or capture the scan again.')
     # A mild non-shrinking display filter suppresses voxel-scale noise. It
     # neither fills holes nor fits a generic face. The report records it.
-    mesh = mesh.filter_smooth_taubin(number_of_iterations=8)
+    smoothed = mesh.filter_smooth_taubin(number_of_iterations=8)
+    smoothing_applied = bool(np.isfinite(np.asarray(smoothed.vertices)).all())
+    if smoothing_applied:
+        smoothing_applied = bool(np.max(np.linalg.norm(np.asarray(smoothed.vertices) - np.asarray(mesh.vertices), axis=1)) < settings.voxel_mm * 2)
+    if smoothing_applied:
+        mesh = smoothed
     mesh.compute_vertex_normals()
     mesh.compute_triangle_normals()
-    return mesh, largest_fraction
+    return mesh, largest_fraction, smoothing_applied
 
 
 def _texture(session, mesh, progress):
@@ -332,7 +342,10 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
                     raise CaptureError('Not enough reliable photo matches. Use a slower capture, a still subject and even lighting, or capture with a LiDAR iPhone.')
             report['integrated_views'] = integrated
             progress(70, 'Building the surface')
-            mesh, main_fraction = _clean_mesh(volume.extract_triangle_mesh(), settings)
+            mesh, main_fraction, smoothing_applied = _clean_mesh(volume.extract_triangle_mesh(), settings)
+            report['surface_smoothing']['applied'] = smoothing_applied
+            if not smoothing_applied:
+                report['warnings'].append('Surface smoothing was skipped because it exceeded the geometry safeguards.')
             model, coverage = _texture(session, mesh, progress)
             # The capture's subject frame already uses Y-up and Z toward the
             # front. Preserve it: sensor-image rotation is not head rotation.
