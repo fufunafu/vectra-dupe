@@ -14,9 +14,9 @@ means files were produced, not that facial accuracy was validated.
 Choose the download matching your computer from the artifacts on the
 [desktop build page](https://github.com/fufunafu/vectra-dupe/actions/workflows/desktop.yml).
 GitHub may require sign-in to download build artifacts. These are preview builds.
-The existing public artifacts predate video support. Version 0.2.0 video support
-has a local Apple Silicon package; its Windows, Intel Mac, and Linux package
-checks are pending publication of the prepared CI branch.
+For video support, use a successful run of the
+`codex/facemap-video-workflow-20260926` branch. Earlier scan-only artifacts do not
+accept video. Each native package is published after its platform tests pass.
 
 Extract both the downloaded artifact ZIP and the archive inside it. Keep the
 entire `faceMap-Desktop` folder together, including `_internal`.
@@ -185,3 +185,6 @@ Local validation and any remaining platform gates are recorded in
 Three.js r160 and its loaders are bundled under their MIT license in
 `facemap_desktop/viewer/vendor/LICENSE`. Reconstruction dependencies retain
 their upstream licenses.
+
+Intel Macs use PyCOLMAP 3.12.5, the last available wheel for that architecture.
+Other targets use 4.2.0. Both use the same reconstruction and quality checks.

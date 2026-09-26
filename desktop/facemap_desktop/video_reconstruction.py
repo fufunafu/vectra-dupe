@@ -49,22 +49,39 @@ def recover_cameras(images, work, settings, region, progress):
     mask_path = work / 'subject-mask.png'
     Image.fromarray(mask).save(mask_path)
     database = work / 'features.db'
+    # COLMAP 4 has no Intel Mac wheel. The final 3.12 wheel uses the same
+    # reconstruction operations with different feature option names.
+    modern = hasattr(pycolmap, 'FeatureExtractionOptions')
+    extraction = {'max_image_size': settings.feature_size, 'num_threads': threads, 'use_gpu': False}
+    extraction.update({'sift': {'max_num_features': 6000}} if modern else {'max_num_features': 6000})
     progress(27, 'Finding matching details in the video')
-    pycolmap.extract_features(database, proxies, camera_mode=pycolmap.CameraMode.SINGLE,
-        reader_options={'camera_model': 'SIMPLE_RADIAL', 'camera_mask_path': mask_path},
-        extraction_options={'max_image_size': settings.feature_size, 'num_threads': threads,
-                            'use_gpu': False, 'sift': {'max_num_features': 6000}}, device=pycolmap.Device.cpu)
+    pycolmap.extract_features(str(database), str(proxies), camera_mode=pycolmap.CameraMode.SINGLE,
+        reader_options={'camera_model': 'SIMPLE_RADIAL', 'camera_mask_path': str(mask_path)},
+        **{'extraction_options' if modern else 'sift_options': extraction}, device=pycolmap.Device.cpu)
     progress(35, 'Matching overlapping views')
-    pycolmap.match_sequential(database, device=pycolmap.Device.cpu,
-        matching_options={'num_threads': threads, 'use_gpu': False},
-        pairing_options={'overlap': 8, 'quadratic_overlap': True, 'loop_detection': False, 'num_threads': threads})
+    matching = {'num_threads': threads, 'use_gpu': False}
+    pairing = {'overlap': 8, 'quadratic_overlap': True, 'loop_detection': False, 'num_threads': threads}
+    pycolmap.match_sequential(str(database), device=pycolmap.Device.cpu,
+        **({'matching_options': matching, 'pairing_options': pairing} if modern
+           else {'sift_options': matching, 'matching_options': pairing}))
     progress(43, 'Recovering the camera positions')
-    maps = pycolmap.incremental_mapping(database, proxies, work / 'sparse', options={
-        'num_threads': threads, 'random_seed': 0, 'multiple_models': False,
-        'min_model_size': 12, 'max_runtime_seconds': 900,
+    mapping = {
+        'num_threads': threads, 'multiple_models': False, 'min_model_size': 12,
         'min_focal_length_ratio': .35, 'max_focal_length_ratio': 3.,
         'max_extra_param': .5, 'ba_local_max_num_iterations': 30, 'ba_global_max_num_iterations': 60,
-        'mapper': {'init_min_tri_angle': 5., 'init_min_num_inliers': 70}})
+        'mapper': {'init_min_tri_angle': 5., 'init_min_num_inliers': 70}}
+    if modern:
+        mapping.update(random_seed=0, max_runtime_seconds=900)
+    else:
+        pycolmap.set_random_seed(0)
+    deadline = time.monotonic() + 900
+
+    def check_mapping_time():
+        if time.monotonic() > deadline:
+            raise CaptureError('Camera recovery took too long. Try a shorter, clearer video.')
+
+    maps = pycolmap.incremental_mapping(str(database), str(proxies), str(work / 'sparse'), options=mapping,
+        initial_image_pair_callback=check_mapping_time, next_image_callback=check_mapping_time)
     if not maps:
         raise CaptureError('Camera positions could not be recovered. Keep the face still and move the phone slowly around it in even light.')
     model = max(maps.values(), key=lambda item: item.num_reg_images())
@@ -96,7 +113,7 @@ def recover_cameras(images, work, settings, region, progress):
     photos = []
     for index, image in enumerate(registered):
         camera = model.cameras[image.camera_id]
-        if camera.model_name != 'SIMPLE_RADIAL' or not np.isfinite(camera.params).all():
+        if camera.model.name != 'SIMPLE_RADIAL' or not np.isfinite(camera.params).all():
             raise CaptureError('Recovered camera calibration is unsupported.')
         with Image.open(images / image.name) as source:
             pixels = np.asarray(source.convert('RGB'))

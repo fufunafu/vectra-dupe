@@ -103,7 +103,15 @@ class VideoPipelineTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('ffmpeg'), 'FFmpeg is only needed for independent decoder comparison')
     def test_phone_display_rotation_and_decoded_pixels_match_ffmpeg(self):
         rotated = self.root / 'rotated.mov'
-        subprocess.run(['ffmpeg','-v','error','-n','-display_rotation','90','-i',str(self.source),'-c','copy',str(rotated)], check=True, timeout=30)
+        help_text = subprocess.run(['ffmpeg','-hide_banner','-h','full'], capture_output=True,
+                                   text=True, check=True, timeout=15).stdout
+        if '-display_rotation' in help_text:
+            rotation_args = ['-display_rotation','90','-i',str(self.source),'-c','copy']
+        else:
+            # Older FFmpeg releases set the container display matrix through
+            # stream metadata. Recent releases require the input override.
+            rotation_args = ['-i',str(self.source),'-c','copy','-metadata:s:v:0','rotate=90']
+        subprocess.run(['ffmpeg','-v','error','-n',*rotation_args,str(rotated)], check=True, timeout=30)
         meta, _ = probe(rotated)
         self.assertEqual((meta['display_width'],meta['display_height']), (2160,3840))
         reference = self.root / 'rotated.png'

@@ -14,7 +14,8 @@ dependencies = [
   "opencv-python-headless==4.11.0.86",
   "open3d==0.19.0",
   "trimesh>=4.6,<5",
-  "pycolmap==4.2.0",
+  "pycolmap==4.2.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+  "pycolmap==3.12.5; sys_platform == 'darwin' and platform_machine == 'x86_64'",
   "av==16.1.0",
 ]
 
