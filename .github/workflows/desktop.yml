@@ -29,7 +29,7 @@ jobs:
           cache: pip
           cache-dependency-path: desktop/pyproject.toml
       - name: Install desktop package
-        run: python -m pip install --only-binary=:all: ./desktop pyinstaller
+        run: python -m pip install --only-binary=":all:" ./desktop pyinstaller
       - name: Check CPU dependencies
         run: python -m facemap_desktop --doctor
       - name: Test archive import, reconstruction and local viewer
