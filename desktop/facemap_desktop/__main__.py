@@ -20,8 +20,12 @@ def main():
     parser.add_argument('--view', type=Path, help='Open an existing result in the local viewer')
     parser.add_argument('--json-progress', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--gui-self-test', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--self-test', action='store_true', help='Reconstruct a synthetic fixture without personal photos')
     args = parser.parse_args()
+    if args.gui_self_test:
+        from .gui_smoke import run
+        return run()
     if args.self_test:
         if args.output is None:
             parser.error('--self-test requires a new --output folder')

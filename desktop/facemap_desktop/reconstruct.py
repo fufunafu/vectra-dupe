@@ -202,8 +202,8 @@ def _clean_mesh(mesh, settings):
     labels, counts, _ = mesh.cluster_connected_triangles()
     counts = np.asarray(counts)
     largest_fraction = float(counts.max() / counts.sum())
-    if largest_fraction < .25:
-        raise CaptureError("The reconstructed surface is too fragmented. Recapture with less subject movement and more overlapping photos.")
+    if largest_fraction < .65:
+        raise CaptureError("The scan did not form one consistent surface. Camera tracking drift or subject movement may have displaced the views. Capture again with the subject still and overlapping photos.")
     mesh.remove_triangles_by_mask(counts[np.asarray(labels)] < max(30, counts.max() * .025))
     mesh.remove_unreferenced_vertices()
     if len(mesh.triangles) > settings.max_triangles:
@@ -299,6 +299,17 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
             report['mode'] = selected
             if selected == 'depth' and not session.poses:
                 raise CaptureError('This scan has no LiDAR depth. Select Automatic or Photos mode.')
+            if selected == 'depth':
+                from .alignment import align_depth_session
+                report['depth_alignment'] = {}
+                session = align_depth_session(session, report['depth_alignment'], progress)
+                if report['depth_alignment']['status'] == 'recovered':
+                    report['warnings'].append('Camera positions were recovered from matching photographs and captured depth. Inspect the recovered surface for residual seams or gaps.')
+                    excluded = report['depth_alignment'].get('excluded_sweep_photos', 0)
+                    if excluded:
+                        report['warnings'].append(f'{excluded} photographs could not be aligned reliably and were excluded from texture projection. The original export is unchanged.')
+                report['texture_source_photos'] = len(session.photos)
+                save_report()
             volume = o3d.pipelines.integration.ScalableTSDFVolume(
                 voxel_length=settings.voxel_mm, sdf_trunc=max(10. if selected == 'depth' else 6., settings.voxel_mm * 4),
                 color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
@@ -306,7 +317,7 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
             integrated = 0
             if selected == 'depth':
                 for i, entry in enumerate(session.poses):
-                    progress(8 + int(60 * i / len(session.poses)), f'Combining depth view {i + 1} of {len(session.poses)}')
+                    progress(50 + int(18 * i / len(session.poses)), f'Combining depth view {i + 1} of {len(session.poses)}')
                     depth = np.fromfile(session.directory / entry['depth_file'], dtype='<f4').reshape(entry['height'], entry['width'])
                     depth = depth * entry.get('depth_unit_mm', 1)
                     # Smooth captured samples only; never turn missing depth

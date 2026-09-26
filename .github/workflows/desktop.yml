@@ -39,12 +39,25 @@ jobs:
         run: python -m PyInstaller --noconfirm --onedir --console --name faceMap-Desktop --collect-all facemap_desktop --collect-all open3d --collect-all scipy --collect-all sklearn frozen_entry.py
       - name: Test packaged executable on Windows
         if: runner.os == 'Windows'
-        run: desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --self-test --output packaged-smoke
+        run: |
+          desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --doctor
+          desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --self-test --output packaged-smoke
+          desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --gui-self-test
       - name: Test packaged executable on Mac and Linux
         if: runner.os != 'Windows'
-        run: desktop/dist/faceMap-Desktop/faceMap-Desktop --self-test --output packaged-smoke
+        run: |
+          desktop/dist/faceMap-Desktop/faceMap-Desktop --doctor
+          desktop/dist/faceMap-Desktop/faceMap-Desktop --self-test --output packaged-smoke
+      - name: Test packaged desktop window on Mac
+        if: runner.os == 'macOS'
+        run: desktop/dist/faceMap-Desktop/faceMap-Desktop --gui-self-test
+      - name: Test packaged desktop window on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a desktop/dist/faceMap-Desktop/faceMap-Desktop --gui-self-test
+      - name: Archive runnable package with file permissions
+        run: python desktop/package_release.py
       - uses: actions/upload-artifact@v4
         with:
           name: faceMap-Desktop-${{ matrix.os }}
-          path: desktop/dist/faceMap-Desktop
+          path: desktop/release/*
           if-no-files-found: error

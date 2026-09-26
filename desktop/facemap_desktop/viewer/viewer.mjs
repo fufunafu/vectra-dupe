@@ -11,6 +11,8 @@ try {
   const report = await response.json();
   for (const [label, value] of [
     ['Reconstruction', report.mode === 'depth' ? 'LiDAR depth' : 'Photo stereo'],
+    ['View alignment', report.depth_alignment?.status === 'recovered' ? 'Recovered from photos'
+      : report.depth_alignment?.status === 'recorded' ? 'Checked' : 'Not checked'],
     ['Captured photographs', report.photos ?? 0],
     ['Surface triangles', Number(report.triangles).toLocaleString()],
     ['Photo coverage', `${Math.round(report.texture_coverage * 100)}%`],
