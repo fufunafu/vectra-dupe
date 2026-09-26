@@ -6,11 +6,13 @@ import tempfile
 import time
 import tkinter as tk
 import zipfile
+from urllib.request import urlopen
 
 import cv2
 
 from .fixtures import make_plane
 from .gui import Desktop
+from .viewer import serve_viewer
 
 
 def run():
@@ -44,6 +46,15 @@ def run():
                 raise RuntimeError(f'Desktop reconstruction failed: {app.status.get()}')
             if not (app.result / 'model.glb').is_file():
                 raise RuntimeError('Desktop worker did not export a model')
+            server, url = serve_viewer(app.result, open_browser=False)
+            try:
+                for name in ('', 'viewer.mjs', 'vendor/three.module.js', 'vendor/loaders/GLTFLoader.js', 'model.glb'):
+                    with urlopen(url + name, timeout=5) as response:
+                        if response.status != 200 or not response.read(16):
+                            raise RuntimeError(f'Packaged viewer resource unavailable: {name}')
+            finally:
+                server.shutdown()
+                server.server_close()
             app.start.invoke()
             app.cancel.invoke()
             deadline = time.monotonic() + 15
@@ -54,7 +65,7 @@ def run():
                 raise RuntimeError('Desktop cancellation did not finish')
             if (app.result / 'model.glb').exists():
                 raise RuntimeError('Cancelled job retained a completed model')
-            print(json.dumps({'gui': 'passed', 'worker': 'passed', 'cancel': 'passed', 'cascade_data': 'passed'}))
+            print(json.dumps({'gui': 'passed', 'worker': 'passed', 'cancel': 'passed', 'cascade_data': 'passed', 'viewer_assets': 'passed'}))
         finally:
             if app.process:
                 app.process.kill()

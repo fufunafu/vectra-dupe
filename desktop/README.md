@@ -9,7 +9,31 @@ or the existing Mac processing server. Photo-only CPU reconstruction is
 experimental and can leave gaps or reject difficult captures. A completed job
 means files were produced, not that facial accuracy was validated.
 
-## Start
+## Start a native package
+
+Choose the download matching your computer from the artifacts on the
+[desktop build page](https://github.com/fufunafu/vectra-dupe/actions/workflows/desktop.yml).
+GitHub may require sign-in to download build artifacts. These are preview builds.
+
+Extract both the downloaded artifact ZIP and the archive inside it. Keep the
+entire `faceMap-Desktop` folder together, including `_internal`.
+
+- Windows x64: open `faceMap-Desktop.exe` inside the extracted folder.
+- Mac: extract the `.tar.gz`, then open the `faceMap-Desktop` executable.
+  Choose `arm64` for Apple Silicon or `x86_64` for Intel.
+- Linux x64: extract the `.tar.gz`, then run `./faceMap-Desktop` inside its folder.
+
+Native packages include Python and the CPU engine. No Python installation or
+first-run engine download is needed. They are unsigned previews, so the OS may
+show an unfamiliar-publisher prompt or block launch. Do not disable system
+security to run them. Source installation below remains available.
+
+Packaged builds are tested on Windows Server 2025 x64, Ubuntu 22.04 x64,
+and macOS 15 on both Mac architectures. Older operating systems are not
+verified by these builds. Windows 10/11 compatibility remains a target rather
+than a completed test on those desktop editions.
+
+## Start from source
 
 1. Install **64-bit Python 3.11 or 3.12** from
    [python.org](https://www.python.org/downloads/). Include Tcl/Tk and, on Windows,
@@ -68,8 +92,12 @@ iPhones. It does not reconstruct from arbitrary uncalibrated image folders.
 Fast subject movement, blur, lighting changes and camera drift can cause gaps,
 distortion, or failed reconstruction. It does not synthesize missing anatomy.
 
-Depth samples are filtered conservatively and the surface receives eight
-Taubin smoothing iterations. The report records this processing. No accuracy,
+Depth views are checked for alignment before fusion. When supported by matching
+captured photos and depth, the engine recovers rigid camera drift. Inconsistent
+or unverifiable views are rejected. Depth samples are filtered conservatively
+and the engine attempts eight Taubin smoothing iterations, skipping smoothing
+if it creates invalid coordinates or moves the surface too far. The report
+records this processing. No accuracy,
 volume, or clinical measurement claims are made. The new CPU photo engine is
 not claimed to match Apple Object Capture quality.
 
@@ -121,7 +149,9 @@ output overwrite protection, failed-job cleanup, and local-viewer access limits.
 `.github/workflows/desktop.yml` runs this suite on Windows, Linux, Apple Silicon
 Mac, and Intel Mac. It builds a PyInstaller folder package on each OS and runs
 the synthetic reconstruction with the **packaged executable** before retaining
-the artifact. A workflow definition is not evidence that its jobs have passed.
+the artifact. It also checks the packaged window, background worker, cancellation,
+and bundled face-detection resources. Linux GUI tests use a virtual display.
+A workflow definition is not evidence that its jobs have passed.
 Native packages do not need a separate Python installation. They are not yet
 code-signed, notarized, or published as a public download.
 
