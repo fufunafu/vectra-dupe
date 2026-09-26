@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>faceMap | Your reconstruction</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+</head>
+<body>
+  <header><a class="brand" href="./">faceMap<span>DESKTOP</span></a><span class="local">Processed on your computer</span></header>
+  <main>
+    <aside>
+      <p class="eyebrow">YOUR RECONSTRUCTION</p>
+      <h1>A closer look.</h1>
+      <p class="intro">Drag to rotate. Scroll to zoom.<br>Right-drag to move the model.</p>
+      <div id="facts" aria-live="polite">Loading scan information...</div>
+      <div class="controls">
+        <label><input id="texture" type="checkbox" checked> Show photo colour</label>
+        <label><input id="wireframe" type="checkbox"> Show mesh edges</label>
+        <button id="reset" type="button">Reset view</button>
+      </div>
+      <h2>Save a copy</h2>
+      <a class="download" href="model.glb?download" download="faceMap-model.glb">Download 3D model <span>GLB</span></a>
+      <a class="secondary" href="surface-mm.ply?download" download="faceMap-surface-mm.ply">Download surface in millimetres (PLY)</a>
+      <details><summary>Capture and processing notes</summary><ul id="notes"></ul><a href="report.json" download="faceMap-report.json">Save processing report</a></details>
+      <p class="footnote">Inspect for gaps and distortion before use. This reconstruction is not a validated clinical measurement.</p>
+    </aside>
+    <section id="view" aria-label="Interactive 3D reconstruction">
+      <div class="view-label">3D SURFACE <span id="mode"></span></div>
+      <div id="status" role="status">Opening your model...</div>
+      <div class="view-hint">ROTATE &nbsp; / &nbsp; ZOOM &nbsp; / &nbsp; EXPLORE</div>
+    </section>
+  </main>
+  <script type="module" src="viewer.mjs"></script>
+</body>
+</html>

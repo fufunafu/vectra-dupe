@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "facemap-desktop"
+version = "0.1.0"
+description = "Local CPU reconstruction of faceMap iPhone exports"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "numpy==1.26.4",
+  "scipy==1.13.1",
+  "Pillow>=11.3,<13",
+  "opencv-python-headless==4.11.0.86",
+  "open3d==0.19.0",
+  "trimesh>=4.6,<5",
+]
+
+[project.scripts]
+facemap-desktop = "facemap_desktop.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["facemap_desktop*"]
+
+[tool.setuptools.package-data]
+facemap_desktop = ["viewer/*", "viewer/vendor/*", "viewer/vendor/controls/*", "viewer/vendor/loaders/*", "viewer/vendor/utils/*"]
