@@ -9,11 +9,19 @@ try {
   const response = await fetch('report.json');
   if (!response.ok) throw new Error('Could not read the processing report.');
   const report = await response.json();
+  const video = report.mode === 'video';
+  if (video) {
+    const download = $('surface-download');
+    download.href = 'surface.ply?download';
+    download.download = 'faceMap-surface.ply';
+    download.textContent = 'Download surface (PLY, unscaled)';
+  }
   for (const [label, value] of [
-    ['Reconstruction', report.mode === 'depth' ? 'LiDAR depth' : 'Photo stereo'],
-    ['View alignment', report.depth_alignment?.status === 'recovered' ? 'Recovered from photos'
+    ['Reconstruction', video ? 'Video' : report.mode === 'depth' ? 'LiDAR depth' : 'Photo stereo'],
+    ['View alignment', video ? 'Estimated from video' : report.depth_alignment?.status === 'recovered' ? 'Recovered from photos'
       : report.depth_alignment?.status === 'recorded' ? 'Checked' : 'Not checked'],
-    ['Captured photographs', report.photos ?? 0],
+    [video ? 'Aligned video frames' : 'Captured photographs', report.photos ?? 0],
+    ['Scale', video ? 'Unknown, display only' : 'Recorded scale'],
     ['Surface triangles', Number(report.triangles).toLocaleString()],
     ['Photo coverage', `${Math.round(report.texture_coverage * 100)}%`],
     ['Capture type', report.demo ? 'Synthetic demo' : 'Real capture'],
@@ -27,7 +35,7 @@ try {
   for (const warning of report.warnings ?? []) {
     const item = document.createElement('li'); item.textContent = warning; $('notes').appendChild(item);
   }
-  $('mode').textContent = report.demo ? 'SYNTHETIC DEMO' : report.mode === 'photos' ? 'EXPERIMENTAL PHOTO STEREO' : 'LIDAR CAPTURE';
+  $('mode').textContent = report.demo ? 'SYNTHETIC DEMO' : video ? 'VIDEO · UNSCALED' : report.mode === 'photos' ? 'EXPERIMENTAL PHOTO STEREO' : 'LIDAR CAPTURE';
   let renderer;
   try { renderer = new THREE.WebGLRenderer({antialias:true}); }
   catch { throw new Error('This browser cannot display 3D. You can still download the GLB or PLY and open it in a 3D viewer.'); }

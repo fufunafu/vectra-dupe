@@ -15,8 +15,13 @@ from pathlib import Path
 import time
 
 # Limit native thread pools before importing numerical libraries in a worker.
+_thread_limit = min(4, os.cpu_count() or 1)
 for _key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
-    os.environ.setdefault(_key, str(min(4, os.cpu_count() or 1)))
+    try:
+        requested = int(os.environ.get(_key, _thread_limit))
+    except ValueError:
+        requested = _thread_limit
+    os.environ[_key] = str(max(1, min(_thread_limit, requested)))
 
 import cv2
 import numpy as np
@@ -277,6 +282,11 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
     progress = progress or (lambda percent, message: None)
     if mode not in ('auto', 'depth', 'photos') or preset not in PRESETS:
         raise ValueError('Unknown reconstruction mode or preset.')
+    if Path(source).suffix.lower() in ('.mov', '.mp4', '.m4v'):
+        if mode == 'depth':
+            raise CaptureError('Video has no LiDAR depth. Select Automatic or Photos mode.')
+        from .video_reconstruction import reconstruct_video
+        return reconstruct_video(source, output, preset, progress)
     output = Path(output).expanduser().absolute()
     output.mkdir(parents=True, exist_ok=False)
     report = {'status': 'processing', 'engine': 'facemap-cpu', 'version': '0.1.0',
@@ -294,6 +304,8 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
         progress(1, 'Checking and importing scan')
         with open_session(source, output) as session:
             report.update(session.summary())
+            from .readiness import assess
+            report['capture_readiness'] = assess(session.metadata)
             settings = PRESETS[preset]
             selected = 'depth' if mode == 'auto' and session.poses else ('photos' if mode == 'auto' else mode)
             report['mode'] = selected
@@ -378,6 +390,8 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
             return report
     except BaseException as error:
         report.update(status='cancelled' if isinstance(error, KeyboardInterrupt) else 'failed', error=str(error))
+        if hasattr(error, 'readiness'):
+            report['capture_readiness'] = error.readiness
         # A failed export must never leave a file that looks like a finished model.
         for name in ('model.glb', 'surface-mm.ply'):
             (output / name).unlink(missing_ok=True)

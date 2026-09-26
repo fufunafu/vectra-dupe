@@ -1,11 +1,11 @@
 # faceMap Desktop
 
-Import a ZIP from the faceMap iPhone app, reconstruct on your own computer,
+Import an original MOV/MP4/M4V video or scan ZIP from the faceMap iPhone app, reconstruct on your own computer,
 inspect the model, and export GLB or PLY. No account, Apple reconstruction SDK,
 NVIDIA GPU, processing subscription, or cloud upload is required.
 
 This is a new desktop companion. It does not change the submitted iPhone build
-or the existing Mac processing server. Photo-only CPU reconstruction is
+or the existing Mac processing server. Video and photo-only CPU reconstruction are
 experimental and can leave gaps or reject difficult captures. A completed job
 means files were produced, not that facial accuracy was validated.
 
@@ -44,13 +44,13 @@ than a completed test on those desktop editions.
 4. First launch installs the engine into a private user environment. Allow
    several minutes, an internet connection, and about 3 GB of free disk space.
    Later processing and viewing work offline.
-5. On the iPhone, open **Sessions > Export scan**. Transfer the ZIP to your
+5. On the iPhone, open **Sessions > Export video** (or **Export scan** for older scans). Transfer the MOV or ZIP to your
    computer using AirDrop to a Mac or a file service accessible from Windows
-   or Linux. Choose that ZIP in the desktop window.
+   or Linux. Choose that MOV or ZIP in the desktop window.
 6. Choose a result folder and press **Create 3D model**. Then press **View model**.
 
 Each job creates its own new result folder. Existing results and the original
-ZIP are not overwritten. Cancel stops the worker and removes its temporary
+capture are not overwritten. Cancel stops the worker and removes its temporary
 capture copy. Keep the desktop window open while using the browser viewer.
 
 Linux may require `python3-tk`, `python3-venv`, `libgl1`, and `libgomp1` from the
@@ -69,9 +69,11 @@ See the validation record below for what has actually run.
 
 Start with **Quick** on older machines. An 8 GB RAM computer is the initial
 engineering target, not a measured minimum across all captures. The engine
-uses at most four native CPU threads, processes photo pairs sequentially,
+requests small numerical thread pools, processes photo pairs sequentially,
 bounds image size and the number of stereo pairs, and caps output triangles.
 Large inputs can still require substantial memory and disk space.
+OpenCV's macOS GCD backend manages its own worker pool, so the four-thread
+request is not a hard total-process thread limit on every platform.
 
 Native Windows ARM, 32-bit systems, ChromeOS without a Linux environment, and
 old operating systems are not verified targets. Browser viewing needs WebGL;
@@ -82,13 +84,15 @@ The interface reports rendering failures and still exposes the downloads.
 
 | Mode | Input | Method |
 | --- | --- | --- |
-| Automatic | Any supported iPhone export | LiDAR depth when present; otherwise photo stereo |
+| Automatic | Any supported iPhone export | Video camera recovery, or LiDAR depth when present, or calibrated photo stereo |
+| Video (selected automatically) | Original 4K SDR MOV, MP4 or M4V, up to 30 seconds and 2 GB | Clear-frame selection, CPU COLMAP camera recovery, OpenCV stereo, surface fusion and photo texture |
 | Depth | At least two usable depth views | CPU TSDF fusion of calibrated depth, with captured-photo texture |
 | Photos | At least three overlapping calibrated photos | CPU OpenCV stereo using the iPhone's recorded camera poses, followed by TSDF fusion |
 
 Photo matching checks both directions and rejects unsupported disparity.
 It supports horizontal and vertical stereo baselines, including portrait-held
-iPhones. It does not reconstruct from arbitrary uncalibrated image folders.
+iPhones. Video inputs estimate camera positions from the recording. Arbitrary
+uncalibrated image folders are not accepted by the older scan importer.
 Fast subject movement, blur, lighting changes and camera drift can cause gaps,
 distortion, or failed reconstruction. It does not synthesize missing anatomy.
 
@@ -101,10 +105,26 @@ records this processing. No accuracy,
 volume, or clinical measurement claims are made. The new CPU photo engine is
 not claimed to match Apple Object Capture quality.
 
+## Video models and scale
+
+Video decoding is bundled through PyAV, so FFmpeg does not need to be installed
+separately. Camera recovery and reconstruction run on the CPU. The video must
+contain a still subject seen from overlapping, changing camera positions.
+Unsupported, blurry, static or inconsistent recordings fail with a message
+rather than producing an invented surface. The default subject region is the
+central 70% of the width and 80% of the height; keep the face inside it.
+
+Video has **no measured scale**. Camera parameters are estimated, never presented
+as recorded ARKit calibration. Internal normalization is only for numerical
+stability. The viewer and report label the result as unscaled, and no metric
+measurement or volume comparison is available.
+
 ## Saved files
 
-- `model.glb`: photo-textured model, in **metres**, centered for viewing.
-- `surface-mm.ply`: reconstructed surface in the original **millimetre** frame.
+- `model.glb`: photo-textured model, centered for viewing. Older calibrated scans
+  use metres; video models use arbitrary display units.
+- `surface-mm.ply`: calibrated scan surface in its original millimetre frame.
+- `surface.ply`: video surface in arbitrary units, matching the displayed GLB.
 - `report.json`: status, method, frame counts, warnings, processing time, stereo
   pair decisions, smoothing settings, and the native-to-GLB transform.
 
@@ -125,6 +145,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m facemap_desktop --doctor
 .venv/bin/python -m facemap_desktop /path/to/scan.zip --inspect
 .venv/bin/python -m facemap_desktop /path/to/scan.zip --output /path/to/new-result --preset quick
+.venv/bin/python -m facemap_desktop /path/to/original.mov --output /path/to/new-video-result --preset quick
 .venv/bin/python -m facemap_desktop --view /path/to/new-result
 .venv/bin/python -m facemap_desktop --self-test --output /path/to/new-synthetic-result
 ```

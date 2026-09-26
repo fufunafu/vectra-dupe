@@ -26,6 +26,13 @@ class CaptureError(ValueError):
     """A capture cannot be safely or meaningfully processed."""
 
 
+class IncompleteCapture(CaptureError):
+    def __init__(self, readiness):
+        from .readiness import message
+        self.readiness = readiness
+        super().__init__(message(readiness))
+
+
 def filename(value):
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,159}", value):
         raise CaptureError("A capture filename is invalid. Export the scan again from faceMap.")
@@ -140,6 +147,10 @@ def validate(directory: Path) -> Session:
         raise CaptureError("The scan references duplicate files.")
     if sum((directory / name).stat().st_size for name in references) > MAX_TOTAL:
         raise CaptureError("This scan exceeds the 2 GB import limit.")
+    from .readiness import assess
+    readiness = assess(meta)
+    if readiness['issues']:
+        raise IncompleteCapture(readiness)
     return Session(directory, meta)
 
 

@@ -18,7 +18,8 @@ def serve_viewer(result, open_browser=True):
     assets = Path(__file__).with_name('viewer')
     token = secrets.token_urlsafe(24)
     allowed = {str(p.relative_to(assets)).replace('\\', '/'): p for p in assets.rglob('*') if p.is_file()}
-    allowed.update({'model.glb': result / 'model.glb', 'surface-mm.ply': result / 'surface-mm.ply', 'report.json': result / 'report.json'})
+    allowed.update({'model.glb': result / 'model.glb', 'surface-mm.ply': result / 'surface-mm.ply',
+                    'surface.ply': result / 'surface.ply', 'report.json': result / 'report.json'})
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -43,7 +44,7 @@ def serve_viewer(result, open_browser=True):
             self.send_header('X-Content-Type-Options', 'nosniff')
             self.send_header('Referrer-Policy', 'no-referrer')
             self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' blob:; worker-src 'self' blob:; frame-ancestors 'none'")
-            if name in ('model.glb', 'surface-mm.ply') and urlsplit(self.path).query == 'download':
+            if name in ('model.glb', 'surface-mm.ply', 'surface.ply') and urlsplit(self.path).query == 'download':
                 self.send_header('Content-Disposition', f'attachment; filename="{name}"')
             self.end_headers()
             try:

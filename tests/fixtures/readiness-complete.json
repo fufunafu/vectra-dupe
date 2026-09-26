@@ -1,0 +1,1446 @@
+{
+  "format": "vectra-dupe-session/1",
+  "state": "saved",
+  "label": "Synthetic complete coverage",
+  "device": "iphone-rear-lidar",
+  "captured_at": "2026-09-26T12:00:00Z",
+  "poses": [
+    {
+      "name": "front",
+      "width": 4,
+      "height": 4,
+      "depth_file": "depth_front.bin",
+      "depth_unit_mm": 1,
+      "intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          1.0,
+          -0.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          -0.0,
+          -1.0,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "color_file": "color_front.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "quality": {
+        "accepted_frames": 8,
+        "valid_depth_fraction": 0.9,
+        "maximum_motion": 12,
+        "maximum_translation_mm": 0.5,
+        "maximum_rotation_degrees": 0.2
+      }
+    },
+    {
+      "name": "left_half",
+      "width": 4,
+      "height": 4,
+      "depth_file": "depth_left_half.bin",
+      "depth_unit_mm": 1,
+      "intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.8191520442889919,
+          0.0,
+          -0.5735764363510462,
+          1.9964839425046584e-14
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.573576436351046,
+          -0.0,
+          -0.8191520442889918,
+          449.99999999999994
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "color_file": "color_left_half.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "quality": {
+        "accepted_frames": 8,
+        "valid_depth_fraction": 0.9,
+        "maximum_motion": 12,
+        "maximum_translation_mm": 0.5,
+        "maximum_rotation_degrees": 0.2
+      }
+    },
+    {
+      "name": "left",
+      "width": 4,
+      "height": 4,
+      "depth_file": "depth_left.bin",
+      "depth_unit_mm": 1,
+      "intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.3090169943749475,
+          0.0,
+          -0.9510565162951536,
+          -2.8163988681793944e-14
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.9510565162951535,
+          -0.0,
+          -0.30901699437494745,
+          449.99999999999994
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "color_file": "color_left.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "quality": {
+        "accepted_frames": 8,
+        "valid_depth_fraction": 0.9,
+        "maximum_motion": 12,
+        "maximum_translation_mm": 0.5,
+        "maximum_rotation_degrees": 0.2
+      }
+    },
+    {
+      "name": "right_half",
+      "width": 4,
+      "height": 4,
+      "depth_file": "depth_right_half.bin",
+      "depth_unit_mm": 1,
+      "intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.8191520442889919,
+          -0.0,
+          0.5735764363510462,
+          -1.9964839425046584e-14
+        ],
+        [
+          -0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.573576436351046,
+          -0.0,
+          -0.8191520442889918,
+          449.99999999999994
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "color_file": "color_right_half.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "quality": {
+        "accepted_frames": 8,
+        "valid_depth_fraction": 0.9,
+        "maximum_motion": 12,
+        "maximum_translation_mm": 0.5,
+        "maximum_rotation_degrees": 0.2
+      }
+    },
+    {
+      "name": "right",
+      "width": 4,
+      "height": 4,
+      "depth_file": "depth_right.bin",
+      "depth_unit_mm": 1,
+      "intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.3090169943749475,
+          -0.0,
+          0.9510565162951536,
+          2.8163988681793944e-14
+        ],
+        [
+          -0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.9510565162951535,
+          -0.0,
+          -0.30901699437494745,
+          449.99999999999994
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "color_file": "color_right.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "quality": {
+        "accepted_frames": 8,
+        "valid_depth_fraction": 0.9,
+        "maximum_motion": 12,
+        "maximum_translation_mm": 0.5,
+        "maximum_rotation_degrees": 0.2
+      }
+    },
+    {
+      "name": "brow",
+      "width": 4,
+      "height": 4,
+      "depth_file": "depth_brow.bin",
+      "depth_unit_mm": 1,
+      "intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          1.0,
+          -0.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.0,
+          -0.8660254037844387,
+          0.49999999999999994,
+          -6.788379208588913e-15
+        ],
+        [
+          0.0,
+          -0.49999999999999994,
+          -0.8660254037844387,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "color_file": "color_brow.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "quality": {
+        "accepted_frames": 8,
+        "valid_depth_fraction": 0.9,
+        "maximum_motion": 12,
+        "maximum_translation_mm": 0.5,
+        "maximum_rotation_degrees": 0.2
+      }
+    },
+    {
+      "name": "jaw",
+      "width": 4,
+      "height": 4,
+      "depth_file": "depth_jaw.bin",
+      "depth_unit_mm": 1,
+      "intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          1.0,
+          -0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          -0.8660254037844387,
+          -0.49999999999999994,
+          6.788379208588913e-15
+        ],
+        [
+          0.0,
+          0.49999999999999994,
+          -0.8660254037844387,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "color_file": "color_jaw.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "quality": {
+        "accepted_frames": 8,
+        "valid_depth_fraction": 0.9,
+        "maximum_motion": 12,
+        "maximum_translation_mm": 0.5,
+        "maximum_rotation_degrees": 0.2
+      }
+    }
+  ],
+  "color_frames": [
+    {
+      "name": "orbit_000",
+      "color_file": "orbit_000.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.3090169943749474,
+          0.0,
+          -0.9510565162951535,
+          2.8829260722700217e-14
+        ],
+        [
+          -0.401933851733823,
+          -0.9063077870366499,
+          -0.1305962250110758,
+          -2.8072928920292466e-15
+        ],
+        [
+          -0.8619499266302463,
+          0.4226182617406995,
+          -0.2800645083286755,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_001",
+      "color_file": "orbit_001.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.6691306063588582,
+          0.0,
+          -0.7431448254773941,
+          6.6581984495532155e-16
+        ],
+        [
+          -0.31406657436485175,
+          -0.9063077870366499,
+          -0.28278681373688086,
+          -1.6407548645980887e-14
+        ],
+        [
+          -0.6735179422261546,
+          0.42261826174069944,
+          -0.6064382790875886,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_002",
+      "color_file": "orbit_002.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.9135454576426009,
+          0.0,
+          -0.40673664307580026,
+          -8.260895992807908e-15
+        ],
+        [
+          -0.17189433308294202,
+          -0.90630778703665,
+          -0.3860809933300278,
+          3.951753302066003e-15
+        ],
+        [
+          -0.3686285868927443,
+          0.4226182617406995,
+          -0.8279533620734493,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_003",
+      "color_file": "orbit_003.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          1.0,
+          -0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          -0.9063077870366499,
+          -0.4226182617406994,
+          -6.588363505145135e-15
+        ],
+        [
+          0.0,
+          0.4226182617406994,
+          -0.9063077870366499,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_004",
+      "color_file": "orbit_004.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.9135454576426009,
+          -0.0,
+          0.40673664307580026,
+          8.260895992807908e-15
+        ],
+        [
+          0.17189433308294202,
+          -0.90630778703665,
+          -0.3860809933300278,
+          3.951753302066003e-15
+        ],
+        [
+          0.3686285868927443,
+          0.4226182617406995,
+          -0.8279533620734493,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_005",
+      "color_file": "orbit_005.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.6691306063588582,
+          -0.0,
+          0.7431448254773941,
+          -6.6581984495532155e-16
+        ],
+        [
+          0.31406657436485175,
+          -0.9063077870366499,
+          -0.28278681373688086,
+          -1.6407548645980887e-14
+        ],
+        [
+          0.6735179422261546,
+          0.42261826174069944,
+          -0.6064382790875886,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_006",
+      "color_file": "orbit_006.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.3090169943749474,
+          -0.0,
+          0.9510565162951535,
+          -2.8829260722700217e-14
+        ],
+        [
+          0.401933851733823,
+          -0.9063077870366499,
+          -0.1305962250110758,
+          -2.8072928920292466e-15
+        ],
+        [
+          0.8619499266302463,
+          0.4226182617406995,
+          -0.2800645083286755,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_007",
+      "color_file": "orbit_007.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.3090169943749475,
+          0.0,
+          -0.9510565162951536,
+          -2.8163988681793944e-14
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.9510565162951535,
+          -0.0,
+          -0.30901699437494745,
+          449.99999999999994
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_008",
+      "color_file": "orbit_008.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.6691306063588582,
+          0.0,
+          -0.7431448254773944,
+          3.354471633756323e-14
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.7431448254773942,
+          -0.0,
+          -0.6691306063588581,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_009",
+      "color_file": "orbit_009.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.913545457642601,
+          0.0,
+          -0.40673664307580026,
+          2.6984314411918068e-15
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.4067366430758002,
+          -0.0,
+          -0.9135454576426009,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_010",
+      "color_file": "orbit_010.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          1.0,
+          -0.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          -0.0,
+          -1.0,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_011",
+      "color_file": "orbit_011.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.913545457642601,
+          -0.0,
+          0.40673664307580026,
+          -2.6984314411918068e-15
+        ],
+        [
+          -0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.4067366430758002,
+          -0.0,
+          -0.9135454576426009,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_012",
+      "color_file": "orbit_012.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.6691306063588582,
+          -0.0,
+          0.7431448254773944,
+          -3.354471633756323e-14
+        ],
+        [
+          -0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.7431448254773942,
+          -0.0,
+          -0.6691306063588581,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_013",
+      "color_file": "orbit_013.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.3090169943749475,
+          -0.0,
+          0.9510565162951536,
+          2.8163988681793944e-14
+        ],
+        [
+          -0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.9510565162951535,
+          -0.0,
+          -0.30901699437494745,
+          449.99999999999994
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_014",
+      "color_file": "orbit_014.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.3090169943749474,
+          0.0,
+          -0.9510565162951535,
+          2.8829260722700217e-14
+        ],
+        [
+          0.401933851733823,
+          -0.9063077870366499,
+          0.1305962250110758,
+          2.8072928920292466e-15
+        ],
+        [
+          -0.8619499266302463,
+          -0.4226182617406995,
+          -0.2800645083286755,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_015",
+      "color_file": "orbit_015.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.6691306063588582,
+          0.0,
+          -0.7431448254773941,
+          6.6581984495532155e-16
+        ],
+        [
+          0.31406657436485175,
+          -0.9063077870366499,
+          0.28278681373688086,
+          1.6407548645980887e-14
+        ],
+        [
+          -0.6735179422261546,
+          -0.42261826174069944,
+          -0.6064382790875886,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_016",
+      "color_file": "orbit_016.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.9135454576426009,
+          0.0,
+          -0.40673664307580026,
+          -8.260895992807908e-15
+        ],
+        [
+          0.17189433308294202,
+          -0.90630778703665,
+          0.3860809933300278,
+          -3.951753302066003e-15
+        ],
+        [
+          -0.3686285868927443,
+          -0.4226182617406995,
+          -0.8279533620734493,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_017",
+      "color_file": "orbit_017.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          1.0,
+          -0.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.0,
+          -0.9063077870366499,
+          0.4226182617406994,
+          6.588363505145135e-15
+        ],
+        [
+          0.0,
+          -0.4226182617406994,
+          -0.9063077870366499,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_018",
+      "color_file": "orbit_018.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.9135454576426009,
+          -0.0,
+          0.40673664307580026,
+          8.260895992807908e-15
+        ],
+        [
+          -0.17189433308294202,
+          -0.90630778703665,
+          0.3860809933300278,
+          -3.951753302066003e-15
+        ],
+        [
+          0.3686285868927443,
+          -0.4226182617406995,
+          -0.8279533620734493,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_019",
+      "color_file": "orbit_019.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.6691306063588582,
+          -0.0,
+          0.7431448254773941,
+          -6.6581984495532155e-16
+        ],
+        [
+          -0.31406657436485175,
+          -0.9063077870366499,
+          0.28278681373688086,
+          1.6407548645980887e-14
+        ],
+        [
+          0.6735179422261546,
+          -0.42261826174069944,
+          -0.6064382790875886,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    },
+    {
+      "name": "orbit_020",
+      "color_file": "orbit_020.jpg",
+      "rgb_width": 8,
+      "rgb_height": 8,
+      "rgb_intrinsics": {
+        "fx": 100,
+        "fy": 100,
+        "cx": 4,
+        "cy": 4
+      },
+      "world_to_camera": [
+        [
+          0.3090169943749474,
+          -0.0,
+          0.9510565162951535,
+          -2.8829260722700217e-14
+        ],
+        [
+          -0.401933851733823,
+          -0.9063077870366499,
+          0.1305962250110758,
+          2.8072928920292466e-15
+        ],
+        [
+          0.8619499266302463,
+          -0.4226182617406995,
+          -0.2800645083286755,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "photo_quality": {
+        "sharpness": 120,
+        "mean_luma": 120,
+        "clipped_fraction": 0,
+        "region": {
+          "x": 0.1,
+          "y": 0.1,
+          "width": 0.8,
+          "height": 0.8
+        },
+        "exposure_duration_seconds": 0.008333333333333333
+      }
+    }
+  ]
+}

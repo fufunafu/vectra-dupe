@@ -36,13 +36,15 @@ jobs:
         run: python -m unittest discover -s desktop/tests -v
       - name: Build desktop executable
         working-directory: desktop
-        run: python -m PyInstaller --noconfirm --onedir --console --name faceMap-Desktop --collect-all facemap_desktop --collect-all open3d --collect-all scipy --collect-all sklearn --collect-data cv2 --copy-metadata numpy --copy-metadata scipy --copy-metadata Pillow --copy-metadata trimesh frozen_entry.py
+        run: python -m PyInstaller --noconfirm --onedir --console --name faceMap-Desktop --collect-all facemap_desktop --collect-all open3d --collect-all scipy --collect-all sklearn --collect-all av --collect-all pycolmap --collect-data cv2 --copy-metadata numpy --copy-metadata scipy --copy-metadata Pillow --copy-metadata trimesh frozen_entry.py
       - name: Test packaged executable on Windows
         if: runner.os == 'Windows'
         run: |
           desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --doctor
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --self-test --output packaged-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --self-test-video --output packaged-video-smoke
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --gui-self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -51,6 +53,7 @@ jobs:
         run: |
           desktop/dist/faceMap-Desktop/faceMap-Desktop --doctor
           desktop/dist/faceMap-Desktop/faceMap-Desktop --self-test --output packaged-smoke
+          desktop/dist/faceMap-Desktop/faceMap-Desktop --self-test-video --output packaged-video-smoke
       - name: Test packaged desktop window on Mac
         if: runner.os == 'macOS'
         run: desktop/dist/faceMap-Desktop/faceMap-Desktop --gui-self-test

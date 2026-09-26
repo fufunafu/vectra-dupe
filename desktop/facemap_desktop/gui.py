@@ -30,20 +30,20 @@ class Desktop:
         frame.grid(sticky='nsew')
         frame.columnconfigure(0, weight=1)
         ttk.Label(frame, text='Turn your capture into a 3D model', font=('', 21, 'bold'), wraplength=600).grid(sticky='w', pady=(0, 10))
-        ttk.Label(frame, text='Export a scan from faceMap on your iPhone, then choose the ZIP here.\nYour scan is processed on this computer and is never uploaded.', wraplength=610).grid(sticky='w', pady=(0, 20))
+        ttk.Label(frame, text='Export a video or scan from faceMap on your iPhone, then choose it here.\nYour capture is processed on this computer and is never uploaded.', wraplength=610).grid(sticky='w', pady=(0, 20))
         self.source = tk.StringVar()
         self.destination = tk.StringVar(value=str(Path.home() / 'Documents' / 'faceMap Results'))
         self.preset = tk.StringVar(value='balanced')
         self.mode = tk.StringVar(value='auto')
-        self.status = tk.StringVar(value='Choose a scan to begin.')
+        self.status = tk.StringVar(value='Choose a video or scan to begin.')
         self.controls = []
-        ttk.Label(frame, text='Scan ZIP').grid(sticky='w')
+        ttk.Label(frame, text='Video or scan ZIP').grid(sticky='w')
         row = ttk.Frame(frame)
         row.grid(sticky='ew', pady=(5, 14))
         row.columnconfigure(0, weight=1)
         field = ttk.Entry(row, textvariable=self.source)
         field.grid(row=0, column=0, sticky='ew')
-        choose = ttk.Button(row, text='Choose scan...', command=self.choose)
+        choose = ttk.Button(row, text='Choose capture...', command=self.choose)
         choose.grid(row=0, column=1, padx=(8, 0))
         self.controls.extend([field, choose])
         ttk.Label(frame, text='Save results in').grid(sticky='w')
@@ -64,7 +64,7 @@ class Desktop:
         mode = ttk.Combobox(row, textvariable=self.mode, values=['auto', 'depth', 'photos'], state='readonly', width=14)
         mode.grid(row=1, column=1, pady=(4, 0))
         self.controls.extend([quality, mode])
-        ttk.Label(frame, text='Automatic uses LiDAR when available. Photo reconstruction is experimental.\nQuick uses less memory; detail takes longer. No dedicated GPU is required.', wraplength=610).grid(sticky='w', pady=(0, 14))
+        ttk.Label(frame, text='Automatic supports videos and older LiDAR scans. Video models have no measured scale.\nQuick uses less memory; detail takes longer. No dedicated GPU is required.', wraplength=610).grid(sticky='w', pady=(0, 14))
         self.bar = ttk.Progressbar(frame, maximum=100)
         self.bar.grid(sticky='ew', pady=(0, 8))
         ttk.Label(frame, textvariable=self.status, wraplength=600).grid(sticky='w', pady=(0, 14))
@@ -80,7 +80,8 @@ class Desktop:
         root.after(150, self.poll)
 
     def choose(self):
-        path = filedialog.askopenfilename(title='Choose a faceMap export', filetypes=[('faceMap scan ZIP', '*.zip')])
+        path = filedialog.askopenfilename(title='Choose a faceMap export', filetypes=[
+            ('Video or faceMap scan', '*.mov *.MOV *.mp4 *.MP4 *.m4v *.M4V *.zip'), ('All files', '*')])
         if path:
             self.source.set(path)
 
@@ -93,7 +94,7 @@ class Desktop:
         if self.process:
             return
         if not Path(self.source.get()).is_file():
-            messagebox.showerror('Choose a scan', 'Select the ZIP exported from faceMap first.')
+            messagebox.showerror('Choose a capture', 'Select a video or scan ZIP exported from faceMap first.')
             return
         self.result = Path(self.destination.get()).expanduser() / ('Scan-' + datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:6])
         entry = [sys.executable, '--worker'] if getattr(sys, 'frozen', False) else [sys.executable, '-m', 'facemap_desktop']
@@ -145,7 +146,7 @@ class Desktop:
                         for path in self.result.glob('facemap-import-*'):
                             if path.is_dir():
                                 shutil.rmtree(path)
-                        for name in ('model.glb', 'surface-mm.ply', 'report.json.tmp'):
+                        for name in ('model.glb', 'surface-mm.ply', 'surface.ply', 'report.json.tmp'):
                             (self.result / name).unlink(missing_ok=True)
                         report.update(status='cancelled')
                         (self.result / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')

@@ -11,7 +11,7 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(description='Reconstruct faceMap iPhone scans locally using the CPU.')
-    parser.add_argument('scan', nargs='?', help='Scan ZIP or extracted session folder')
+    parser.add_argument('scan', nargs='?', help='Original MOV/MP4/M4V video, scan ZIP or extracted session folder')
     parser.add_argument('--output', type=Path, help='New, unused result folder')
     parser.add_argument('--mode', choices=['auto', 'depth', 'photos'], default='auto')
     parser.add_argument('--preset', choices=['quick', 'balanced', 'detail'], default='balanced')
@@ -22,10 +22,25 @@ def main():
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--gui-self-test', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--self-test', action='store_true', help='Reconstruct a synthetic fixture without personal photos')
+    parser.add_argument('--self-test-video', action='store_true', help='Render a generated 4K target and reconstruct it without supplied camera data')
     args = parser.parse_args()
     if args.gui_self_test:
         from .gui_smoke import run
         return run()
+    if args.self_test_video:
+        if args.output is None:
+            parser.error('--self-test-video requires a new --output folder')
+        import tempfile
+        from .video_fixture import make_video
+        from .reconstruct import reconstruct
+        with tempfile.TemporaryDirectory(prefix='facemap-video-self-test-') as temp:
+            source = make_video(Path(temp) / 'generated-target.mov')
+            report = reconstruct(source, args.output, preset='quick')
+            report['demo'] = True
+            (args.output / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+            print(json.dumps({'status': report['status'], 'demo': True, 'output': str(args.output),
+                              'triangles': report['triangles'], 'registered_frames': report['camera_recovery']['registered_frames']}))
+        return 0
     if args.self_test:
         if args.output is None:
             parser.error('--self-test requires a new --output folder')
@@ -43,6 +58,9 @@ def main():
             deps = {name: importlib.metadata.version(name) for name in ('numpy', 'scipy', 'Pillow', 'open3d', 'trimesh')}
             import cv2
             deps['opencv'] = cv2.__version__
+            import av
+            import pycolmap
+            deps.update(av=av.__version__, pycolmap=pycolmap.__version__)
             try:
                 import tkinter
                 gui = {'available': True, 'tk': tkinter.TkVersion}
@@ -77,6 +95,11 @@ def main():
         return 0
     try:
         if args.inspect:
+            if Path(args.scan).suffix.lower() in ('.mov', '.mp4', '.m4v'):
+                from .video_decode import probe
+                metadata, _ = probe(Path(args.scan).expanduser().resolve(strict=True))
+                print(json.dumps({'capture_kind': 'video', 'metric_scale_available': False, **metadata}, indent=2))
+                return 0
             from .session import open_session
             with open_session(args.scan) as session:
                 print(json.dumps(session.summary(), indent=2))
