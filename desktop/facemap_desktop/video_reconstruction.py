@@ -80,13 +80,42 @@ def recover_cameras(images, work, settings, region, progress):
         if time.monotonic() > deadline:
             raise CaptureError('Camera recovery took too long. Try a shorter, clearer video.')
 
-    maps = pycolmap.incremental_mapping(str(database), str(proxies), str(work / 'sparse'), options=mapping,
-        initial_image_pair_callback=check_mapping_time, next_image_callback=check_mapping_time)
-    if not maps:
+    with (pycolmap.Database.open(str(database)) if modern else pycolmap.Database(str(database))) as db:
+        image_ids = [image.image_id for image in sorted(db.read_all_images(), key=lambda image: image.name)]
+    if len(image_ids) < 12:
+        raise CaptureError('Too few usable video frames remain for camera recovery.')
+    # A nearly adjacent automatic starting pair can produce a two-view dead end.
+    # Retry with separated, already matched views. Keep the same inlier,
+    # coverage and geometry requirements; never accept that partial model.
+    gap = min(8, len(image_ids) - 1)
+    starts = [max(0, min(len(image_ids) - gap - 1, center - gap // 2))
+              for center in (len(image_ids) // 2, len(image_ids) // 3)]
+    initial_pairs = [None, *dict.fromkeys((image_ids[start], image_ids[start + gap]) for start in starts)]
+    required_views = max(12, math.ceil(len(paths) * .6))
+    model = None
+    attempts = 0
+    for attempts, initial_pair in enumerate(initial_pairs, 1):
+        check_mapping_time()
+        options = dict(mapping)
+        if modern:
+            options.update(random_seed=attempts - 1, max_runtime_seconds=max(1, int(deadline - time.monotonic())))
+        else:
+            pycolmap.set_random_seed(attempts - 1)
+        if initial_pair:
+            options.update(init_image_id1=initial_pair[0], init_image_id2=initial_pair[1])
+            progress(43, 'Trying another pair of overlapping views')
+        maps = pycolmap.incremental_mapping(str(database), str(proxies), str(work / f'sparse-{attempts}'), options=options,
+            initial_image_pair_callback=check_mapping_time, next_image_callback=check_mapping_time)
+        if maps:
+            candidate = max(maps.values(), key=lambda item: item.num_reg_images())
+            if model is None or candidate.num_reg_images() > model.num_reg_images():
+                model = candidate
+            if model.num_reg_images() >= required_views:
+                break
+    if model is None:
         raise CaptureError('Camera positions could not be recovered. Keep the face still and move the phone slowly around it in even light.')
-    model = max(maps.values(), key=lambda item: item.num_reg_images())
     registered = sorted(model.images.values(), key=lambda image: image.name)
-    if len(registered) < max(12, math.ceil(len(paths) * .6)):
+    if len(registered) < required_views:
         raise CaptureError('Too few video views align into one model. Record a slower continuous pass with more overlap.')
     points = np.array([point.xyz for point in model.points3D.values()
                        if point.track.length() >= 3 and point.error < 2.5])
@@ -136,6 +165,7 @@ def recover_cameras(images, work, settings, region, progress):
             'rgb_intrinsics': {'fx': k[0, 0], 'fy': k[1, 1], 'cx': k[0, 2], 'cy': k[1, 2]},
             'world_to_camera': transform.tolist(), 'calibration_source': 'estimated_from_video'})
     details = {'engine': 'pycolmap', 'version': pycolmap.__version__,
+        'initialization_attempts': attempts,
         'registered_frames': len(photos), 'selected_frames': len(paths), 'reliable_points': len(points),
         'mean_reprojection_error_pixels': error, 'camera_spread_relative_to_distance': float(spread),
         'scale_source': 'arbitrary_numerical_normalization', 'metric_scale_available': False,

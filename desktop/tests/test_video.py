@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import av
 import numpy as np
@@ -63,9 +64,22 @@ class VideoPipelineTests(unittest.TestCase):
         cls.temp.cleanup()
 
     def test_actual_video_to_textured_model_without_supplied_camera_data(self):
+        import pycolmap
         digest = hashlib.sha256(self.source.read_bytes()).hexdigest()
         output = self.root / 'result'
-        report = reconstruct(self.source, output, preset='quick')
+        mapping = pycolmap.incremental_mapping
+        attempts = 0
+
+        def fail_first_initialization(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            return {} if attempts == 1 else mapping(*args, **kwargs)
+
+        # Exercise a real alternate-pair reconstruction after a failed initial
+        # alignment, without lowering any of the normal output requirements.
+        with patch.object(pycolmap, 'incremental_mapping', side_effect=fail_first_initialization):
+            report = reconstruct(self.source, output, preset='quick')
+        self.assertGreaterEqual(report['camera_recovery']['initialization_attempts'], 2)
         self.assertEqual(report['status'], 'complete')
         self.assertEqual(report['mode'], 'video')
         self.assertFalse(report['metric_scale_available'])
