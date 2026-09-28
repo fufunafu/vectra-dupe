@@ -35,10 +35,9 @@ def assess(metadata):
            or not .1 <= p['quality']['valid_depth_fraction'] <= 1 for p in poses):
         issues.append('Some frames lack reliable tracking, facial sharpness, or LiDAR confidence.')
     times = [p.get('frame_timestamp_seconds') for p in poses]
-    if (any(not _number(t) for t in times) or not times
-            or any(b <= a or b-a > 2.5 for a, b in zip(sorted(times), sorted(times)[1:]))
-            or (_number(duration) and (min(times) > 2.5 or duration-max(times) > 2.5))):
-        issues.append('Too much of the pass lacked usable synchronized frames. Move slowly in brighter light.')
+    if (any(not _number(t) or t < 0 or (_number(duration) and t > duration) for t in times) or not times
+            or any(b <= a for a, b in zip(times, times[1:]))):
+        issues.append('The synchronized photo timestamps are inconsistent with the recording.')
     if any(isinstance(w, str) and w.startswith('Capture interrupted:') for w in metadata.get('warnings', []) or []):
         issues.append('Tracking or subject movement interrupted this capture. Record a new continuous pass.')
     return {'status': 'blocked' if issues else 'passed', 'issues': issues, 'policy_version': 1,
@@ -93,6 +92,7 @@ def validate_files(meta, directory):
         if len(lines) != r['video_frames_written']:
             raise CaptureError('The camera timeline is incomplete.')
         last = -1
+        frames = []
         for line in lines:
             f = json.loads(line)
             t = f.get('timestamp_seconds')
@@ -102,9 +102,35 @@ def validate_files(meta, directory):
                 raise CaptureError('The camera timeline does not match its recording.')
             calibration(f.get('intrinsics'), f.get('camera_to_world_ar_m'))
             last = t
+            frames.append(f)
     except (ValueError, TypeError, AttributeError, UnicodeError) as error:
         raise CaptureError('The camera timeline is damaged or inconsistent.') from error
+    issues = continuity_issues(frames, r['duration_seconds'])
+    if issues:
+        raise CaptureError(' '.join(issues))
     return references
+
+
+def continuity_issues(frames, duration):
+    """Assess the full structurally validated stream, not sparse selected photos."""
+    last, unreliable_since = 0, None
+    for frame in frames:
+        time = frame['timestamp_seconds']
+        if time - last > 2.5:
+            return ['The camera recording has a gap longer than 2.5 seconds. Record a new continuous pass.']
+        reliable = frame['tracking_state'] == 'normal' and frame['has_depth']
+        if not reliable and unreliable_since is None:
+            unreliable_since = time
+        if unreliable_since is not None and time - unreliable_since >= .75:
+            return ['Camera tracking or LiDAR was unavailable for part of this pass. Record a new continuous pass.']
+        if reliable:
+            unreliable_since = None
+        last = time
+    if duration - last > 2.5:
+        return ['The camera recording ends before the capture finishes. Record a new continuous pass.']
+    if unreliable_since is not None and duration - unreliable_since >= .75:
+        return ['Camera tracking or LiDAR was unavailable at the end of this pass. Record a new continuous pass.']
+    return []
 
 
 def read_depth(session, entry):

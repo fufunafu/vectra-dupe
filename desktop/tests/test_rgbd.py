@@ -77,12 +77,31 @@ class RGBDTests(unittest.TestCase):
             (self.capture/'session.json').write_text(json.dumps(meta))
             with self.assertRaises(CaptureError): validate(self.capture)
 
-    def test_repeated_views_and_missing_tail_are_blocked(self):
+    def test_repeated_views_blocked_but_sparse_photos_use_camera_timeline(self):
         meta = copy.deepcopy(self.original)
         for pose in meta['poses']: pose['world_to_camera'] = copy.deepcopy(meta['poses'][0]['world_to_camera'])
         self.assertTrue(any('distinct' in i for i in assess(meta)['issues']))
         meta = copy.deepcopy(self.original); meta['rgbd']['duration_seconds'] = 30
-        self.assertTrue(any('Too much' in i for i in assess(meta)['issues']))
+        self.assertEqual(assess(meta)['status'], 'passed')
+        (self.capture/'session.json').write_text(json.dumps(meta))
+        with self.assertRaisesRegex(CaptureError, 'ends before'): validate(self.capture)
+
+    def test_actual_camera_gaps_tracking_loss_and_missing_depth_are_blocked(self):
+        path = self.capture/'camera-frames.jsonl'; original = path.read_bytes()
+        try:
+            frames = [json.loads(line) for line in original.decode().splitlines()]
+            for failure in ('gap', 'tracking', 'depth'):
+                changed = copy.deepcopy(frames)
+                if failure == 'gap': changed = [f for f in changed if not 3 < f['timestamp_seconds'] < 7]
+                else:
+                    for frame in changed[8:12]:
+                        if failure == 'tracking': frame['tracking_state'] = 'limited'
+                        else: frame['has_depth'] = False
+                meta = copy.deepcopy(self.original); meta['rgbd']['video_frames_written'] = len(changed)
+                (self.capture/'session.json').write_text(json.dumps(meta))
+                path.write_text(''.join(json.dumps(f)+'\n' for f in changed))
+                with self.assertRaisesRegex(CaptureError, 'gap|unavailable'): validate(self.capture)
+        finally: path.write_bytes(original)
 
     def test_stereo_detail_recovers_plane_and_rejects_inconsistent_depth(self):
         session = validate(self.capture); left, right = session.poses[:2]
