@@ -23,10 +23,26 @@ def main():
     parser.add_argument('--gui-self-test', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--self-test', action='store_true', help='Reconstruct a synthetic fixture without personal photos')
     parser.add_argument('--self-test-video', action='store_true', help='Render a generated 4K target and reconstruct it without supplied camera data')
+    parser.add_argument('--self-test-rgbd', action='store_true', help='Reconstruct a generated synchronized colour/depth calibration target')
     args = parser.parse_args()
     if args.gui_self_test:
         from .gui_smoke import run
         return run()
+    if args.self_test_rgbd:
+        if args.output is None:
+            parser.error('--self-test-rgbd requires a new --output folder')
+        import tempfile
+        from .rgbd_fixture import make_rgbd_plane
+        from .reconstruct import reconstruct
+        with tempfile.TemporaryDirectory(prefix='facemap-rgbd-self-test-') as temp:
+            report = reconstruct(make_rgbd_plane(Path(temp)/'capture'), args.output, preset='quick')
+            if report.get('stereo_integrated_views', 0) < 2 or report.get('comparison_eligible') is not False:
+                raise RuntimeError('Synchronized reconstruction did not satisfy its detail/validation contract.')
+            report['demo'] = True
+            (args.output/'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+            print(json.dumps({'status':report['status'], 'demo':True, 'triangles':report['triangles'],
+                              'stereo_pairs':report['stereo_integrated_views']}))
+        return 0
     if args.self_test_video:
         if args.output is None:
             parser.error('--self-test-video requires a new --output folder')

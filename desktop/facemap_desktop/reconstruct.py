@@ -30,6 +30,7 @@ from PIL import Image
 import trimesh
 
 from .session import CaptureError, Session, open_session
+from .rgbd import is_rgbd, read_depth, gate_stereo
 
 
 @dataclass(frozen=True)
@@ -198,7 +199,7 @@ def stereo_depth(session, left, right, image_size):
     return depth, rgb1, k, e, {'matched_pixels': count, 'vertical_stereo': vertical}
 
 
-def _clean_mesh(mesh, settings):
+def _clean_mesh(mesh, settings, smooth=True):
     if len(mesh.triangles) < 100:
         raise CaptureError("Not enough consistent surface could be reconstructed. Try a slower capture with even lighting.")
     mesh.remove_duplicated_vertices()
@@ -220,8 +221,8 @@ def _clean_mesh(mesh, settings):
         raise CaptureError('Surface reconstruction produced invalid coordinates. Try Quick mode or capture the scan again.')
     # A mild non-shrinking display filter suppresses voxel-scale noise. It
     # neither fills holes nor fits a generic face. The report records it.
-    smoothed = mesh.filter_smooth_taubin(number_of_iterations=8)
-    smoothing_applied = bool(np.isfinite(np.asarray(smoothed.vertices)).all())
+    smoothed = mesh.filter_smooth_taubin(number_of_iterations=8) if smooth else mesh
+    smoothing_applied = smooth and bool(np.isfinite(np.asarray(smoothed.vertices)).all())
     if smoothing_applied:
         smoothing_applied = bool(np.max(np.linalg.norm(np.asarray(smoothed.vertices) - np.asarray(mesh.vertices), axis=1)) < settings.voxel_mm * 2)
     if smoothing_applied:
@@ -241,7 +242,7 @@ def _texture(session, mesh, progress):
         return trimesh.Trimesh(vertices=vertices, faces=faces, vertex_colors=np.asarray(mesh.vertex_colors), process=False), 0.
     indexes = np.unique(np.linspace(0, len(photos) - 1, min(12, len(photos))).round().astype(int))
     entries = [photos[i] for i in indexes]
-    cell, columns = 1024, 4
+    cell, columns = (2048 if is_rgbd(session.metadata) else 1024), 4
     atlas = Image.new('RGB', (cell * columns, cell * 4), (175, 175, 175))
     best = np.full(len(faces), -1., dtype=np.float64)
     uv = np.tile([(.5 + 3 * cell) / (4 * cell), 1 - (.5 + 3 * cell) / (4 * cell)], (len(faces), 3, 1))
@@ -252,9 +253,25 @@ def _texture(session, mesh, progress):
         scale = min(cell / entry['rgb_width'], cell / entry['rgb_height'])
         size = (max(1, round(entry['rgb_width'] * scale)), max(1, round(entry['rgb_height'] * scale)))
         image = photo(session, entry, size)
+        k = matrix_k(entry, size)
+        if is_rgbd(session.metadata):
+            # Retain face pixels in the texture atlas instead of paying for background.
+            region = entry['photo_quality']['region']
+            w, h = entry['rgb_width'], entry['rgb_height']
+            x0, y0 = max(0, int(region['x'] * w)-16), max(0, int(region['y'] * h)-16)
+            x1, y1 = min(w, math.ceil((region['x']+region['width'])*w)+16), min(h, math.ceil((region['y']+region['height'])*h)+16)
+            scale = min(1., cell/(x1-x0), cell/(y1-y0))
+            size = (max(1, round((x1-x0)*scale)), max(1, round((y1-y0)*scale)))
+            with Image.open(session.directory / entry['color_file']) as original:
+                image = np.asarray(original.convert('RGB').crop((x0, y0, x1, y1)).resize(size, Image.Resampling.LANCZOS)).copy()
+            k = matrix_k(entry)
+            k[0, 2] -= x0; k[1, 2] -= y0
+            sx, sy = size[0]/(x1-x0), size[1]/(y1-y0)
+            k[0, 0] *= sx; k[1, 1] *= sy
+            k[0, 2] = (k[0, 2]+.5)*sx-.5; k[1, 2] = (k[1, 2]+.5)*sy-.5
         ox, oy = (i % columns) * cell, (i // columns) * cell
         atlas.paste(Image.fromarray(image), (ox, oy))
-        e, k = extrinsic(entry), matrix_k(entry, size)
+        e = extrinsic(entry)
         p = vertices @ e[:3, :3].T + e[:3, 3]
         q = p @ k.T
         coords = q[:, :2] / np.maximum(q[:, 2:], 1e-6)
@@ -273,6 +290,10 @@ def _texture(session, mesh, progress):
         uv[choose, :, 0] = (projected[:, :, 0] + .5 + ox) / atlas.width
         uv[choose, :, 1] = 1 - (projected[:, :, 1] + .5 + oy) / atlas.height
     model = trimesh.Trimesh(vertices=vertices[faces].reshape(-1, 3), faces=np.arange(len(faces) * 3).reshape(-1, 3), process=False)
+    if is_rgbd(session.metadata):
+        # Preserve high-resolution face crops while keeping the hosted model bounded.
+        atlas.format = 'JPEG'
+        atlas.encoderinfo = {'quality': 95, 'subsampling': 0}
     material = trimesh.visual.material.PBRMaterial(baseColorTexture=atlas, roughnessFactor=1., metallicFactor=0., doubleSided=True)
     model.visual = trimesh.visual.TextureVisuals(uv=uv.reshape(-1, 2), material=material)
     return model, float(np.mean(best >= 0))
@@ -308,7 +329,15 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
             report['capture_readiness'] = assess(session.metadata)
             settings = PRESETS[preset]
             selected = 'depth' if mode == 'auto' and session.poses else ('photos' if mode == 'auto' else mode)
-            report['mode'] = selected
+            hybrid = is_rgbd(session.metadata)
+            if hybrid:
+                selected = 'depth'
+                settings = Settings(max(settings.image_size, 1536), settings.max_views, settings.voxel_mm, settings.max_triangles)
+                report['surface_smoothing'] = {'method': 'none', 'iterations': 0}
+                report['comparison_eligible'] = False
+                report['synchronized_capture'] = session.metadata['rgbd']
+                report['texture_atlas'] = {'maximum_size': 8192, 'face_crops': True, 'format': 'JPEG', 'quality': 95}
+            report['mode'] = 'video_depth_stereo' if hybrid else selected
             if selected == 'depth' and not session.poses:
                 raise CaptureError('This scan has no LiDAR depth. Select Automatic or Photos mode.')
             if selected == 'depth':
@@ -328,14 +357,16 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
                 depth_sampling_stride=2)
             integrated = 0
             if selected == 'depth':
-                for i, entry in enumerate(session.poses):
-                    progress(50 + int(18 * i / len(session.poses)), f'Combining depth view {i + 1} of {len(session.poses)}')
-                    depth = np.fromfile(session.directory / entry['depth_file'], dtype='<f4').reshape(entry['height'], entry['width'])
-                    depth = depth * entry.get('depth_unit_mm', 1)
+                depth_entries = session.poses
+                if hybrid:
+                    depth_entries = [session.poses[i] for i in np.unique(np.linspace(0, len(session.poses)-1, min(12, len(session.poses))).round().astype(int))]
+                for i, entry in enumerate(depth_entries):
+                    progress(50 + int(18 * i / len(session.poses)), f'Combining depth view {i + 1} of {len(depth_entries)}')
+                    depth = read_depth(session, entry)
                     # Smooth captured samples only; never turn missing depth
                     # into measured data. Reject isolated large discontinuities.
                     median = cv2.medianBlur(depth.astype(np.float32), 3)
-                    depth = np.where((depth > 0) & (median > 0) & (np.abs(depth - median) <= 20), median, 0)
+                    depth = np.where((depth > 0) & (median > 0) & (np.abs(depth - median) <= 20), depth if hybrid else median, 0)
                     k, e = matrix_k(entry, depth=True), extrinsic(entry, False)
                     depth = crop_depth(depth, k, e)
                     if np.count_nonzero(depth) < 100:
@@ -346,6 +377,32 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
                 if integrated < 2:
                     raise CaptureError('At least two usable depth views are needed. Complete the guided face capture and export it again.')
                 report['warnings'].append('LiDAR surface detail is limited by the captured depth resolution.')
+                if hybrid:
+                    report['stereo_depth_gate_mm'] = 10
+                    report['lidar_integrated_views'] = integrated
+                    stereo_integrated = 0
+                    pairs = stereo_pairs(session.photos, settings.max_views)
+                    for i, (a, b) in enumerate(pairs):
+                        progress(55 + int(13*i/len(pairs)), f'Checking depth-supported photo detail {i+1} of {len(pairs)}')
+                        record = {'frames': [a, b]}
+                        try:
+                            left, right = session.photos[a], session.photos[b]
+                            depth, rgb, k, e, details = stereo_depth(session, left, right, settings.image_size)
+                            depth = gate_stereo(session, depth, k, e, [left, right])
+                            supported = int(np.count_nonzero(depth))
+                            if supported < 300:
+                                raise CaptureError('Too few stereo samples agree with both measured depth maps.')
+                            integrate(volume, depth, rgb, k, e)
+                            stereo_integrated += 1; integrated += 1
+                            record.update(status='integrated', depth_supported_pixels=supported, **details)
+                        except CaptureError as error:
+                            record.update(status='rejected', reason=str(error))
+                        report['pairs'].append(record)
+                        save_report()
+                    report['stereo_integrated_views'] = stereo_integrated
+                    if stereo_integrated < 2:
+                        raise CaptureError('Synchronized depth was recorded, but photographs did not support reliable surface detail. Capture again more slowly in brighter light.')
+                    report['warnings'].append('Photographic detail was accepted only where both LiDAR maps supported it within 10 mm. This tolerance is a consistency gate, not a measurement accuracy claim.')
             else:
                 report['warnings'].append('Photo-only CPU stereo is experimental. It can leave gaps and is not equivalent to Apple Object Capture.')
                 pairs = stereo_pairs(session.photos, settings.max_views)
@@ -365,9 +422,9 @@ def reconstruct(source, output, mode='auto', preset='balanced', progress=None):
                     raise CaptureError('Not enough reliable photo matches. Use a slower capture, a still subject and even lighting, or capture with a LiDAR iPhone.')
             report['integrated_views'] = integrated
             progress(70, 'Building the surface')
-            mesh, main_fraction, smoothing_applied = _clean_mesh(volume.extract_triangle_mesh(), settings)
+            mesh, main_fraction, smoothing_applied = _clean_mesh(volume.extract_triangle_mesh(), settings, smooth=not hybrid)
             report['surface_smoothing']['applied'] = smoothing_applied
-            if not smoothing_applied:
+            if not smoothing_applied and not hybrid:
                 report['warnings'].append('Surface smoothing was skipped because it exceeded the geometry safeguards.')
             model, coverage = _texture(session, mesh, progress)
             # The capture's subject frame already uses Y-up and Z toward the

@@ -175,9 +175,13 @@ Mac, and Intel Mac. It builds a PyInstaller folder package on each OS and runs
 the synthetic reconstruction with the **packaged executable** before retaining
 the artifact. It also checks the packaged window, background worker, cancellation,
 and bundled face-detection resources. Linux GUI tests use a virtual display.
-A workflow definition is not evidence that its jobs have passed.
+Video support passed all four platforms in
+[run 36255319649](https://github.com/fufunafu/vectra-dupe/actions/runs/36255319649),
+including actual reconstruction by each packaged executable. Each recovered
+30 camera views from the generated 4K target. This validates the software path,
+not real-face quality.
 Native packages do not need a separate Python installation. They are not yet
-code-signed, notarized, or published as a public download.
+code-signed or notarized; downloads are available as GitHub workflow artifacts.
 
 Local validation and any remaining platform gates are recorded in
 `../docs/desktop-portability-validation-2026-09-26.md`.
@@ -188,3 +192,12 @@ their upstream licenses.
 
 Intel Macs use PyCOLMAP 3.12.5, the last available wheel for that architecture.
 Other targets use 4.2.0. Both use the same reconstruction and quality checks.
+
+
+### Synchronized video and LiDAR captures
+
+Use the iPhone's continuous capture on a LiDAR device, then Export scan. The ZIP includes native JPEG keyframes, same-frame raw depth and confidence, camera calibration, and a timestamped movie-frame timeline. The playback movie stays on the phone. Import that ZIP using the existing scan picker or CLI.
+
+Automatic reconstruction verifies coverage and tracking, masks low-confidence depth, checks camera alignment, and combines LiDAR shape with calibrated photo stereo. Stereo samples must agree with both measured depth maps within 10 mm. This is a rejection tolerance, not an accuracy specification. Insufficient photographic support fails the job instead of quietly returning a depth-only model. Sensor scale is retained, but measurements and comparisons are not validated. Original files remain unchanged. The synchronized route does not apply a surface smoothing filter.
+
+`--self-test-rgbd --output new-test-folder` runs a generated plane through the complete synchronized reconstruction route without personal imagery. The Windows, Linux, and both Mac package checks include this test. Passing calibration fixtures does not establish real-face quality.

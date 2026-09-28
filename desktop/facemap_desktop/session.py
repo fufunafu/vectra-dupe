@@ -90,14 +90,17 @@ def _manifest(path):
         meta = json.loads(path.read_text(encoding='utf-8'), parse_constant=reject)
     except (UnicodeError, json.JSONDecodeError) as error:
         raise CaptureError("The scan metadata is damaged.") from error
-    if not isinstance(meta, dict) or meta.get('format') != FORMAT:
+    if not isinstance(meta, dict) or meta.get('format') not in (FORMAT, 'facemap-rgbd-session/1'):
         raise CaptureError("Choose a ZIP exported using Sessions > Export scan in faceMap.")
     if meta.get('state') not in (None, 'saved'):
         raise CaptureError("Save this capture in faceMap before exporting it.")
     poses, photos = meta.get('poses'), meta.get('color_frames', [])
     if not isinstance(poses, list) or not isinstance(photos, list) or len(poses) > 100 or len(photos) > 1000 or not poses and not photos:
         raise CaptureError("The scan is empty or has too many frames.")
-    if meta.get('capture_kind') not in (None, 'photo_only') or meta.get('capture_kind') == 'photo_only' and poses:
+    if meta.get('format') == 'facemap-rgbd-session/1':
+        from .rgbd import validate_manifest
+        validate_manifest(meta)
+    elif meta.get('capture_kind') not in (None, 'photo_only') or meta.get('capture_kind') == 'photo_only' and poses:
         raise CaptureError("The scan's capture type is inconsistent.")
     return meta
 
@@ -143,6 +146,9 @@ def validate(directory: Path) -> Session:
                         image.verify()
                 except (OSError, SyntaxError, Image.DecompressionBombError) as error:
                     raise CaptureError("A photograph is damaged.") from error
+    if meta['format'] == 'facemap-rgbd-session/1':
+        from .rgbd import validate_files
+        references.extend(validate_files(meta, directory))
     if len({name.casefold() for name in references}) != len(references):
         raise CaptureError("The scan references duplicate files.")
     if sum((directory / name).stat().st_size for name in references) > MAX_TOTAL:

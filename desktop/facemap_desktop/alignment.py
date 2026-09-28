@@ -17,6 +17,7 @@ from scipy.spatial import cKDTree
 from scipy.spatial.transform import Rotation
 
 from .session import CaptureError, Session
+from .rgbd import read_depth, is_rgbd, alignment_pairs
 
 
 MAX_SHIFT_MM = 300.
@@ -105,8 +106,7 @@ def _features(session, entry, *, with_depth):
     if not with_depth or not len(pixels):
         return Features(pixels, descriptors, np.empty((0, 3)) if with_depth else None, size)
 
-    depth = np.fromfile(session.directory / entry['depth_file'], dtype='<f4').reshape(entry['height'], entry['width'])
-    depth = depth * entry.get('depth_unit_mm', 1)
+    depth = read_depth(session, entry)
     kd, kr = matrix_k(entry, depth=True), matrix_k(entry, size)
     ed, er = extrinsic(entry, False), extrinsic(entry)
     if np.allclose(ed, er, atol=1e-5):
@@ -153,12 +153,14 @@ def _matches(a, b):
     return (np.array([m.queryIdx for m in accepted], int), np.array([m.trainIdx for m in accepted], int))
 
 
-def _fit_matches(a, b, seed):
+def _fit_matches(a, b, seed, adaptive=False):
     if len(a) < 8:
         return None
     rng = np.random.default_rng(seed)
     best = np.zeros(len(a), bool)
-    for _ in range(2000):
+    iterations = 2000
+    for attempt in range(2000):
+        if adaptive and attempt >= iterations: break
         sample = rng.choice(len(a), 3, replace=False)
         # Reject collinear triples before estimating a rigid orientation.
         if np.linalg.norm(np.cross(a[sample[1]]-a[sample[0]], a[sample[2]]-a[sample[0]])) < 10:
@@ -169,6 +171,9 @@ def _fit_matches(a, b, seed):
         inlier = np.linalg.norm(transform(a, matrix)-b, axis=1) < MATCH_ERROR_MM
         if inlier.sum() > best.sum():
             best = inlier
+            if adaptive:
+                success = min(.999999, float(best.mean()) ** 3)
+                iterations = min(iterations, max(64, math.ceil(math.log(.001)/math.log(max(1e-9, 1-success)))))
     if best.sum() < 8 or best.mean() < .18:
         return None
     matrix = rigid_fit(a[best], b[best])
@@ -187,8 +192,7 @@ def _geometry_connected(session):
     from .reconstruct import matrix_k, extrinsic
     clouds = []
     for entry in session.poses:
-        depth = np.fromfile(session.directory / entry['depth_file'], dtype='<f4').reshape(entry['height'], entry['width'])
-        depth = depth * entry.get('depth_unit_mm', 1)
+        depth = read_depth(session, entry)
         k, e = matrix_k(entry, depth=True), extrinsic(entry, False)
         y, x = np.indices(depth.shape)
         camera = np.stack(((x-k[0, 2])*depth/k[0, 0], (y-k[1, 2])*depth/k[1, 1], depth), axis=-1)
@@ -272,7 +276,7 @@ def align_depth_session(session, diagnostics, progress):
     diagnostics.update(method='photo_depth_rigid', status='checking', views=[], pairs=[])
     if len(session.poses) < 2:
         raise CaptureError('At least two depth views are needed to verify alignment.')
-    if len(session.poses) > 24:
+    if len(session.poses) > (90 if is_rgbd(session.metadata) else 24):
         raise CaptureError('This capture has too many depth views for desktop alignment. Export one guided scan at a time.')
     features = {}
     for i, entry in enumerate(session.poses):
@@ -287,12 +291,13 @@ def align_depth_session(session, diagnostics, progress):
         return session
 
     edges = []
+    candidate_pairs = alignment_pairs(session) if is_rgbd(session.metadata) else None
     for i in features:
         for j in features:
-            if j >= i:
+            if j >= i or (candidate_pairs is not None and (j, i) not in candidate_pairs):
                 continue
             ia, ib = _matches(features[i], features[j])
-            fitted = _fit_matches(features[i].points[ia], features[j].points[ib], 81 + i * 31 + j)
+            fitted = _fit_matches(features[i].points[ia], features[j].points[ib], 81 + i * 31 + j, adaptive=is_rgbd(session.metadata))
             if fitted is None:
                 continue
             matrix, a, b = fitted
@@ -340,10 +345,26 @@ def align_depth_session(session, diagnostics, progress):
             e[:3, :3], e[:3, 3] = Rotation.from_rotvec(value[:3]).as_matrix(), value[3:]
             result[i] = e
         return result
+    optimization_edges = edges
+    sparse_options = {}
+    if is_rgbd(session.metadata):
+        from scipy.sparse import lil_matrix
+        optimization_edges = []
+        for i, j, matrix, a, b, record in edges:
+            sample = np.unique(np.linspace(0, len(a)-1, min(128, len(a))).round().astype(int))
+            optimization_edges.append((i, j, matrix, a[sample], b[sample], record))
+        pattern = lil_matrix((sum(len(a)*3 for _, _, _, a, _, _ in optimization_edges), len(ids)*6), dtype=np.int8)
+        columns = {view:index*6 for index,view in enumerate(ids)}
+        row = 0
+        for i, j, _, a, _, _ in optimization_edges:
+            for view in (i, j):
+                if view in columns: pattern[row:row+len(a)*3,columns[view]:columns[view]+6] = 1
+            row += len(a)*3
+        sparse_options = {'jac_sparsity': pattern.tocsr(), 'tr_solver': 'lsmr'}
     def residual(values):
         poses = matrices(values)
-        return np.concatenate([(transform(a, poses[i])-transform(b, poses[j])).ravel() for i, j, _, a, b, _ in edges])
-    optimized = least_squares(residual, initial.ravel(), loss='soft_l1', f_scale=4., max_nfev=80)
+        return np.concatenate([(transform(a, poses[i])-transform(b, poses[j])).ravel() for i, j, _, a, b, _ in optimization_edges])
+    optimized = least_squares(residual, initial.ravel(), loss='soft_l1', f_scale=4., max_nfev=80, **sparse_options)
     corrections = matrices(optimized.x)
     for i, j, _, a, b, record in edges:
         error = np.linalg.norm(transform(a, corrections[i])-transform(b, corrections[j]), axis=1)
@@ -356,6 +377,9 @@ def align_depth_session(session, diagnostics, progress):
         diagnostics['status'] = 'rejected'
         raise CaptureError('The scan needs a camera-position correction beyond the supported recovery range. Please capture it again.')
 
+    if is_rgbd(session.metadata) and any(np.linalg.norm(e[:3, 3]) > 30 or _rotation_degrees(e) > 5 for e in corrections.values()):
+        diagnostics['status'] = 'rejected'
+        raise CaptureError('The continuous recording needs excessive pose correction. Record a new pass with the subject still.')
     metadata = copy.deepcopy(session.metadata)
     for i, entry in enumerate(metadata['poses']):
         inverse = np.linalg.inv(corrections[i])

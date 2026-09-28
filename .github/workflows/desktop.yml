@@ -46,6 +46,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --self-test-video --output packaged-video-smoke
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --self-test-rgbd --output packaged-rgbd-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           desktop/dist/faceMap-Desktop/faceMap-Desktop.exe --gui-self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test packaged executable on Mac and Linux
@@ -54,6 +56,7 @@ jobs:
           desktop/dist/faceMap-Desktop/faceMap-Desktop --doctor
           desktop/dist/faceMap-Desktop/faceMap-Desktop --self-test --output packaged-smoke
           desktop/dist/faceMap-Desktop/faceMap-Desktop --self-test-video --output packaged-video-smoke
+          desktop/dist/faceMap-Desktop/faceMap-Desktop --self-test-rgbd --output packaged-rgbd-smoke
       - name: Test packaged desktop window on Mac
         if: runner.os == 'macOS'
         run: desktop/dist/faceMap-Desktop/faceMap-Desktop --gui-self-test

@@ -53,6 +53,9 @@ def _view(entry):
 
 def assess(metadata):
     """Return actionable blockers. Synthetic demos never claim real readiness."""
+    if metadata.get('format') == 'facemap-rgbd-session/1':
+        from .rgbd import assess as assess_rgbd
+        return assess_rgbd(metadata)
     if metadata.get('is_demo') is True:
         return {'status': 'demo', 'issues': [], 'policy_version': 1}
     issues = []
