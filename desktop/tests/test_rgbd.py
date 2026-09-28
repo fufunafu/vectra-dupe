@@ -35,6 +35,28 @@ class RGBDTests(unittest.TestCase):
         self.assertLess(len(pairs), len(session.poses)*10)
         self.assertTrue(all((i, i+1) in pairs for i in range(len(session.poses)-1)))
 
+    def test_longer_capture_preserves_timeline_and_duration_bounds(self):
+        meta = copy.deepcopy(self.original)
+        meta['rgbd']['duration_seconds'] *= 4
+        for pose in meta['poses']:
+            pose['frame_timestamp_seconds'] *= 4
+        timeline = self.capture / 'camera-frames.jsonl'
+        original = timeline.read_bytes()
+        try:
+            frames = [json.loads(line) for line in original.decode().splitlines()]
+            for frame in frames:
+                frame['timestamp_seconds'] *= 4
+            timeline.write_text(''.join(json.dumps(frame)+'\n' for frame in frames))
+            (self.capture/'session.json').write_text(json.dumps(meta))
+            session = validate(self.capture)
+            self.assertGreater(session.metadata['rgbd']['duration_seconds'], 30)
+            self.assertEqual(assess(session.metadata)['status'], 'passed')
+            meta['rgbd']['duration_seconds'] = 92
+            (self.capture/'session.json').write_text(json.dumps(meta))
+            with self.assertRaisesRegex(CaptureError, 'duration'): validate(self.capture)
+        finally:
+            timeline.write_bytes(original)
+
     def test_confidence_gates_without_changing_source(self):
         session = validate(self.capture); entry = session.poses[0]
         path = self.capture/entry['confidence_file']; original = path.read_bytes()

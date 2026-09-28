@@ -53,9 +53,9 @@ def validate_manifest(meta):
     if r.get('depth_source') != 'arkit-sceneDepth' or r.get('depth_association') != 'same-arframe' or r.get('timeline_file') != 'camera-frames.jsonl':
         raise CaptureError('Synchronized depth association and a camera timeline are required.')
     duration = r.get('duration_seconds')
-    if type(duration) not in (float, int) or not math.isfinite(duration) or not 0 < duration <= 31:
+    if type(duration) not in (float, int) or not math.isfinite(duration) or not 0 < duration <= 91:
         raise CaptureError('The synchronized recording duration is invalid.')
-    for key, low, high in [('video_frames_written', 1, 2000), ('video_frames_dropped', 0, 10000)]:
+    for key, low, high in [('video_frames_written', 1, 6000), ('video_frames_dropped', 0, 10000)]:
         if type(r.get(key)) is not int or not low <= r[key] <= high:
             raise CaptureError('The synchronized recording frame counts are invalid.')
     dimensions(r.get('color_width'), r.get('color_height'))
@@ -86,7 +86,7 @@ def validate_files(meta, directory):
         if any(abs(d[key] - k[key]*scale) > .01 for key, scale in [('fx', sx), ('fy', sy), ('cx', sx), ('cy', sy)]):
             raise CaptureError('Depth and colour calibration do not match the same camera frame.')
     path = directory / r['timeline_file']
-    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 2_000_000:
+    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 6_000_000:
         raise CaptureError('The camera timeline is missing or invalid.')
     try:
         lines = path.read_text(encoding='utf-8').splitlines()

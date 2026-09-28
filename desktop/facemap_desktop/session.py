@@ -95,7 +95,7 @@ def _manifest(path):
     if meta.get('state') not in (None, 'saved'):
         raise CaptureError("Save this capture in faceMap before exporting it.")
     poses, photos = meta.get('poses'), meta.get('color_frames', [])
-    if not isinstance(poses, list) or not isinstance(photos, list) or len(poses) > 100 or len(photos) > 1000 or not poses and not photos:
+    if not isinstance(poses, list) or not isinstance(photos, list) or len(poses) > (300 if meta.get('format') == 'facemap-rgbd-session/1' else 100) or len(photos) > 1000 or not poses and not photos:
         raise CaptureError("The scan is empty or has too many frames.")
     if meta.get('format') == 'facemap-rgbd-session/1':
         from .rgbd import validate_manifest
